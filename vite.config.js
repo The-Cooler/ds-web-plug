@@ -6,14 +6,18 @@ export default defineConfig({
     monkey({
       entry: 'src/main.js',
       userscript: {
-        name: 'DeepSeek 自定义系统提示词',
+        name: 'DeepSeek 大肥鱼插件',
         namespace: 'deepseek-custom-prompt',
-        version: '2.0.0',
-        description: '多模板管理，尝试在请求层注入默认提示词',
+        version: '2.1.0',
+        description: '自定义提示词模板 + 桌面宠物挂件',
         author: 'LLL',
         match: ['https://chat.deepseek.com/*'],
         'run-at': 'document-start',
-        grant: ['GM_getValue', 'GM_setValue', 'unsafeWindow'],
+        grant: ['GM_getValue', 'GM_setValue', 'unsafeWindow', 'GM_xmlhttpRequest'],
+        connect: [
+          'gitee.com',
+          'raw.githubusercontent.com',
+        ],
       },
     }),
   ],
