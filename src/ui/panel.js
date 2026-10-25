@@ -22,8 +22,13 @@ function ensurePanel() {
 
   const $ = id => root.querySelector('#' + id);
   const section = root.querySelector('.ds-prompt-window');
-  section.hidden = false;
-  $('__ds_prompt_toggle')?.remove();
+  section.hidden = true;
+  const toggle = $('__ds_prompt_toggle');
+  toggle.hidden = true;
+  toggle.addEventListener('click', () => {
+    section.hidden = !section.hidden;
+    if (!section.hidden) refreshSelect();
+  });
 
   let selectedId = state.presets[0]?.id || '';
 

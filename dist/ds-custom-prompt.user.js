@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek 大肥鱼插件
 // @namespace    deepseek-custom-prompt
-// @version      2.2.1
+// @version      2.2.2
 // @author       LLL
 // @description  自定义提示词模板 + 桌面宠物挂件
 // @downloadURL  https://gitee.com/Ljunyang114/ds-web-plug/raw/main/dist/ds-custom-prompt.user.js
@@ -21,7 +21,7 @@
 	var KEY = "ds_custom_prompt_presets_v2";
 	var ENABLE_KEY = "ds_custom_prompt_enabled_v2";
 	var DEFAULT_KEY = "ds_custom_prompt_default_v2";
-	var MARKER$1 = "[DS_CUSTOM_SYSTEM_PROMPT]";
+	var MARKER$2 = "[DS_CUSTOM_SYSTEM_PROMPT]";
 	var DEFAULT_PRESETS = [{
 		id: "default",
 		name: "默认模板",
@@ -100,20 +100,20 @@
 					const system = data.messages.find((m) => m && m.role === "system");
 					if (system && typeof system.content === "string") {
 						if (!system.content.includes(prompt)) {
-							system.content = `${MARKER$1}\n${prompt}\n\n${system.content}`;
+							system.content = `${MARKER$2}\n${prompt}\n\n${system.content}`;
 							changed = true;
 						}
 					} else {
 						data.messages.unshift({
 							role: "system",
-							content: `${MARKER$1}\n${prompt}`
+							content: `${MARKER$2}\n${prompt}`
 						});
 						changed = true;
 					}
 				}
 			} else if (typeof data.prompt === "string") {
 				if (!data.prompt.includes("[DS_CUSTOM_SYSTEM_PROMPT]")) {
-					data.prompt = `${MARKER$1}\n${prompt}\n\n${data.prompt}`;
+					data.prompt = `${MARKER$2}\n${prompt}\n\n${data.prompt}`;
 					changed = true;
 				}
 			} else return body;
@@ -128,14 +128,14 @@
 		return body;
 	}
 	var HISTORY_URL = /\/api\/v0\/chat\/history_messages(?:[?"#]|$)/i;
-	var MARKER = "[DS_CUSTOM_SYSTEM_PROMPT]";
+	var MARKER$1 = "[DS_CUSTOM_SYSTEM_PROMPT]";
 	function cleanMessage(msg) {
 		if (!msg || typeof msg !== "object") return;
 		const fragments = msg.fragments;
 		if (!Array.isArray(fragments)) return;
 		for (const f of fragments) {
 			if (!f || f.type !== "REQUEST" || typeof f.content !== "string") continue;
-			if (!f.content.startsWith(MARKER)) continue;
+			if (!f.content.startsWith(MARKER$1)) continue;
 			const rest = f.content.slice(25).replace(/^\n/, "");
 			const idx = rest.indexOf("\n\n");
 			f.content = (idx === -1 ? "" : rest.slice(idx + 2)).trim();
@@ -745,8 +745,13 @@
 		panelRoot = root;
 		const $ = (id) => root.querySelector("#" + id);
 		const section = root.querySelector(".ds-prompt-window");
-		section.hidden = false;
-		$("__ds_prompt_toggle")?.remove();
+		section.hidden = true;
+		const toggle = $("__ds_prompt_toggle");
+		toggle.hidden = true;
+		toggle.addEventListener("click", () => {
+			section.hidden = !section.hidden;
+			if (!section.hidden) refreshSelect();
+		});
 		let selectedId = state.presets[0]?.id || "";
 		function status(text) {
 			$("__ds_prompt_status").textContent = text;
@@ -1513,6 +1518,63 @@
 		switchTo(anim, once);
 		log("宠物已启动");
 	}
+	var MARKER = "[DS_CUSTOM_SYSTEM_PROMPT]";
+	var SKIP_IDS = new Set([
+		"__ds_prompt_manager",
+		"__ds_pet_root",
+		"__ds_pet_menu"
+	]);
+	function strip(text) {
+		const idx = text.indexOf(MARKER);
+		if (idx === -1) return text;
+		const before = text.slice(0, idx);
+		const rest = text.slice(idx + 25).replace(/^\n/, "");
+		const sep = rest.indexOf("\n\n");
+		const cleaned = sep === -1 ? "" : rest.slice(sep + 2);
+		return before.trim() === "" ? cleaned : text;
+	}
+	function shouldSkip(node) {
+		let el = node.parentElement;
+		while (el) {
+			if (SKIP_IDS.has(el.id)) return true;
+			el = el.parentElement;
+		}
+		return false;
+	}
+	function scrubRoot(root) {
+		if (!root || !root.textContent?.includes(MARKER)) return;
+		const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+		const targets = [];
+		let node;
+		while (node = walker.nextNode()) {
+			if (!node.data.includes(MARKER)) continue;
+			if (shouldSkip(node)) continue;
+			targets.push(node);
+		}
+		for (const n of targets) {
+			const next = strip(n.data);
+			if (next !== n.data) n.data = next;
+		}
+	}
+	var scheduled = false;
+	var scrubInstalled = false;
+	function schedule() {
+		if (scheduled) return;
+		scheduled = true;
+		setTimeout(() => {
+			scheduled = false;
+			scrubRoot(document.body);
+		}, 800);
+	}
+	function installScrubber() {
+		if (!document.body || scrubInstalled) return;
+		scrubInstalled = true;
+		scrubRoot(document.body);
+		new MutationObserver(schedule).observe(document.body, {
+			childList: true,
+			subtree: true
+		});
+	}
 	(() => {
 		"use strict";
 		installInterceptors(typeof unsafeWindow !== "undefined" ? unsafeWindow : window);
@@ -1524,6 +1586,7 @@
 				unmountPet();
 				mountPromptButton();
 			}
+			installScrubber();
 		};
 		new MutationObserver(() => {
 			if (!document.body) return;

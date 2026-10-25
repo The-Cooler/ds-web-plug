@@ -4,6 +4,7 @@ import { installInterceptors } from './interceptors.js';
 import { mountPet, unmountPet } from './pet/widget.js';
 import { isPetEnabled, setPetEnabled } from './pet/state.js';
 import { mountPromptButton, unmountPromptButton } from './ui/panel.js';
+import { installScrubber } from './scrub.js';
 
 (() => {
   'use strict';
@@ -20,6 +21,7 @@ import { mountPromptButton, unmountPromptButton } from './ui/panel.js';
       unmountPet();
       mountPromptButton();
     }
+    installScrubber();
   };
 
   const observer = new MutationObserver(() => {
