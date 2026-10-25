@@ -23,6 +23,8 @@ import {
   trimTrail,
 } from './physics.js';
 import { log } from '../store.js';
+import { openPromptPanel } from '../ui/panel.js';
+import { setPetEnabled } from './state.js';
 
 const { HIT_BOX, CANVAS_H, FEET_Y, DRAG_THRESHOLD, SLINGSHOT_DOUBLE_MS } = PET_GEOMETRY;
 const POSITION_KEY = 'ds_pet_position_v1';
@@ -60,6 +62,21 @@ function writePosition(pos) {
   } catch (e) {
     console.error('[DS大肥鱼] 位置保存失败', e);
   }
+}
+
+/** 从 DOM 上摘掉宠物：停播视频、清掉菜单，事件与样式保留，
+ *  重新 mountPet 时沿用同一套播放入口。 */
+export function unmountPet() {
+  const root = document.getElementById('__ds_pet_root');
+  if (!root) return;
+  for (const v of root.querySelectorAll('video')) {
+    v.pause();
+    v.onended = null;
+    v.removeAttribute('src');
+    v.load();
+  }
+  document.getElementById('__ds_pet_menu')?.remove();
+  root.remove();
 }
 
 export function mountPet() {
@@ -550,7 +567,7 @@ export function mountPet() {
   hit.addEventListener('pointerup', endDrag);
   hit.addEventListener('pointercancel', endDrag);
 
-  // 右键菜单：按分类点播动作 + 回到初始位置
+  // 右键菜单：只保留回到初始位置
   let menuEl = null;
   function closeMenu() {
     if (menuEl) {
@@ -582,20 +599,15 @@ export function mountPet() {
     title.textContent = '大肥鱼';
     menuEl.appendChild(title);
 
-    for (const cat of animations.categories) {
-      if (!cat.actions.length) continue;
-      const group = document.createElement('div');
-      group.className = 'pet-menu-group';
-      group.textContent = cat.id;
-      group.addEventListener('click', () => {
-        closeMenu();
-        once = true;
-        anim = pick(cat.actions);
-        animRef.current = anim;
-        switchTo(anim, once);
-      });
-      menuEl.appendChild(group);
-    }
+    menuEl.appendChild(menuItem('提示词', () => {
+      openPromptPanel(x, y);
+    }));
+
+    menuEl.appendChild(menuItem('关闭动画', () => {
+      setPetEnabled(false);
+      unmountPet();
+      window.dispatchEvent(new CustomEvent('ds-pet-disabled'));
+    }));
 
     menuEl.appendChild(menuItem('回到初始位置', () => {
       customPos = null;

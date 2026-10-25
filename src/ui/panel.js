@@ -1,8 +1,14 @@
+/**
+ * 提示词面板：原先固定在右下角的浮层，现作为大肥鱼右键菜单的一项弹出。
+ * 面板样式与事件逻辑保持原样，开合入口交给菜单。
+ */
 import { state, save } from '../presets.js';
 import { PANEL_STYLE, PANEL_HTML } from './template.js';
 
-export function createUI() {
-  if (!document.body || document.getElementById('__ds_prompt_manager')) return;
+let panelRoot = null;
+
+function ensurePanel() {
+  if (panelRoot) return panelRoot;
 
   const style = document.createElement('style');
   style.textContent = PANEL_STYLE;
@@ -12,9 +18,13 @@ export function createUI() {
   root.id = '__ds_prompt_manager';
   root.innerHTML = PANEL_HTML;
   document.body.appendChild(root);
+  panelRoot = root;
 
   const $ = id => root.querySelector('#' + id);
-  const panel = root.querySelector('.ds-prompt-window');
+  const section = root.querySelector('.ds-prompt-window');
+  section.hidden = false;
+  $('__ds_prompt_toggle')?.remove();
+
   let selectedId = state.presets[0]?.id || '';
 
   function status(text) {
@@ -41,9 +51,47 @@ export function createUI() {
     $('__ds_prompt_enabled').checked = state.enabled;
   }
 
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.id = '__ds_prompt_manager_close';
+  close.textContent = '关闭';
+  close.style.marginBottom = '10px';
+  close.addEventListener('click', () => {
+    section.hidden = true;
+  });
+  section.prepend(close);
+
+  // 拖拽标题移动窗口。
+  const title = root.querySelector('.ds-title');
+  title.style.cursor = 'move';
+  title.style.userSelect = 'none';
+  let dragStart = null;
+  title.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    const rect = section.getBoundingClientRect();
+    dragStart = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+    title.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  title.addEventListener('pointermove', e => {
+    if (!dragStart) return;
+    const left = Math.max(0, Math.min(e.clientX - dragStart.dx, window.innerWidth - section.offsetWidth));
+    const top = Math.max(0, Math.min(e.clientY - dragStart.dy, window.innerHeight - section.offsetHeight));
+    section.style.left = left + 'px';
+    section.style.top = top + 'px';
+    section.style.right = 'auto';
+    section.style.bottom = 'auto';
+  });
+  title.addEventListener('pointerup', () => {
+    dragStart = null;
+  });
+  title.addEventListener('pointercancel', () => {
+    dragStart = null;
+  });
+
   $('__ds_prompt_toggle').addEventListener('click', () => {
-    panel.hidden = !panel.hidden;
-    if (!panel.hidden) refreshSelect();
+    section.hidden = !section.hidden;
+    if (!section.hidden) refreshSelect();
   });
 
   $('__ds_prompt_select').addEventListener('change', e => {
@@ -95,4 +143,45 @@ export function createUI() {
   });
 
   refreshSelect();
+  return root;
+}
+
+/** 在指定位置弹出提示词面板；重复调用只把已有面板挪过去。 */
+export function openPromptPanel(x, y) {
+  const root = ensurePanel();
+  const section = root.querySelector('.ds-prompt-window');
+  section.hidden = false;
+  const width = section.offsetWidth || 420;
+  section.style.position = 'fixed';
+  section.style.right = 'auto';
+  section.style.bottom = 'auto';
+  section.style.left = Math.max(8, Math.min(x, window.innerWidth - width - 8)) + 'px';
+  section.style.top = Math.max(8, Math.min(y, window.innerHeight - 80)) + 'px';
+  return root;
+}
+
+/** 提示词按钮：宠物关闭时作为入口挂在页面右下角。 */
+export function mountPromptButton() {
+  if (!document.body) return;
+  const root = ensurePanel();
+  const toggle = root.querySelector('#__ds_prompt_toggle');
+  if (!toggle) return;
+  if (root.parentElement !== document.body) document.body.appendChild(root);
+  root.style.position = 'fixed';
+  root.style.right = '24px';
+  root.style.bottom = '100px';
+  root.style.left = 'auto';
+  root.style.top = 'auto';
+  toggle.hidden = false;
+}
+
+/** 宠物接管入口时，按钮由大肥鱼右键菜单替代。 */
+export function unmountPromptButton() {
+  if (!panelRoot) return;
+  const toggle = panelRoot.querySelector('#__ds_prompt_toggle');
+  if (toggle) toggle.hidden = true;
+  panelRoot.style.position = '';
+  panelRoot.style.right = '';
+  panelRoot.style.bottom = '';
+  panelRoot.querySelector('.ds-prompt-window').hidden = true;
 }

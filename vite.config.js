@@ -8,9 +8,11 @@ export default defineConfig({
       userscript: {
         name: 'DeepSeek 大肥鱼插件',
         namespace: 'deepseek-custom-prompt',
-        version: '2.1.0',
+        version: '2.2.0',
         description: '自定义提示词模板 + 桌面宠物挂件',
         author: 'LLL',
+        downloadURL: 'https://gitee.com/Ljunyang114/ds-web-plug/raw/main/dist/ds-custom-prompt.user.js',
+        updateURL: 'https://gitee.com/Ljunyang114/ds-web-plug/raw/main/dist/ds-custom-prompt.user.js',
         match: ['https://chat.deepseek.com/*'],
         'run-at': 'document-start',
         grant: ['GM_getValue', 'GM_setValue', 'unsafeWindow', 'GM_xmlhttpRequest'],

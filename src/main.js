@@ -1,8 +1,9 @@
 import { state } from './presets.js';
 import { log } from './store.js';
 import { installInterceptors } from './interceptors.js';
-import { createUI } from './ui/panel.js';
-import { mountPet } from './pet/widget.js';
+import { mountPet, unmountPet } from './pet/widget.js';
+import { isPetEnabled, setPetEnabled } from './pet/state.js';
+import { mountPromptButton, unmountPromptButton } from './ui/panel.js';
 
 (() => {
   'use strict';
@@ -11,16 +12,33 @@ import { mountPet } from './pet/widget.js';
 
   installInterceptors(W);
 
+  const syncEntry = () => {
+    if (isPetEnabled()) {
+      unmountPromptButton();
+      mountPet();
+    } else {
+      unmountPet();
+      mountPromptButton();
+    }
+  };
+
   const observer = new MutationObserver(() => {
     if (!document.body) return;
-    if (!document.getElementById('__ds_prompt_manager')) createUI();
-    if (!document.getElementById('__ds_pet_root')) mountPet();
+    syncEntry();
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
-  if (document.body) {
-    createUI();
-    mountPet();
-  }
+  if (document.body) syncEntry();
+
+  // 宠物关闭时，双击右下角的提示词按钮把宠物叫回来。
+  document.addEventListener('dblclick', e => {
+    if (e.target?.id === '__ds_prompt_toggle' && !isPetEnabled()) {
+      setPetEnabled(true);
+      syncEntry();
+    }
+  });
+
+  // 右键菜单「关闭动画」后立刻切回提示词按钮。
+  window.addEventListener('ds-pet-disabled', syncEntry);
 
   log('脚本已启动；当前默认模板：', state.defaultId);
 })();

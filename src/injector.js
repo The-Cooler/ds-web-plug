@@ -1,7 +1,11 @@
 import { MARKER, TARGET_URL } from './constants.js';
 import { getPrompt } from './presets.js';
-import { log } from './store.js';
+import { isSessionInjected, log, markSessionInjected } from './store.js';
 
+// 每条会话只注入一次，同一会话里后续每条消息都不再注入。
+// DeepSeek 会预创建 session（preCreateSession），首条消息的请求体里通常已经带
+// chat_session_id，所以按「这个 id 是否处理过」判断，而不是看请求体有没有这个字段。
+// 标记持久化在 GM 存储里，刷新页面后同一会话依然不会重复注入。
 export function modifyBody(body, url) {
   const prompt = getPrompt();
   if (!prompt || typeof body !== 'string') return body;
@@ -9,6 +13,8 @@ export function modifyBody(body, url) {
 
   try {
     const data = JSON.parse(body);
+    const sessionId = data.chat_session_id;
+    if (isSessionInjected(sessionId)) return body;
     let changed = false;
 
     if (Array.isArray(data.messages)) {
@@ -41,6 +47,7 @@ export function modifyBody(body, url) {
     }
 
     if (changed) {
+      markSessionInjected(sessionId);
       log('已修改匹配请求', String(url));
       return JSON.stringify(data);
     }
