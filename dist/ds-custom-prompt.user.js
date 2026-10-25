@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek 大肥鱼插件
 // @namespace    deepseek-custom-prompt
-// @version      1.0
+// @version      2.2.1
 // @author       LLL
 // @description  自定义提示词模板 + 桌面宠物挂件
 // @downloadURL  https://gitee.com/Ljunyang114/ds-web-plug/raw/main/dist/ds-custom-prompt.user.js
@@ -21,7 +21,7 @@
 	var KEY = "ds_custom_prompt_presets_v2";
 	var ENABLE_KEY = "ds_custom_prompt_enabled_v2";
 	var DEFAULT_KEY = "ds_custom_prompt_default_v2";
-	var MARKER = "[DS_CUSTOM_SYSTEM_PROMPT]";
+	var MARKER$1 = "[DS_CUSTOM_SYSTEM_PROMPT]";
 	var DEFAULT_PRESETS = [{
 		id: "default",
 		name: "默认模板",
@@ -100,20 +100,20 @@
 					const system = data.messages.find((m) => m && m.role === "system");
 					if (system && typeof system.content === "string") {
 						if (!system.content.includes(prompt)) {
-							system.content = `${MARKER}\n${prompt}\n\n${system.content}`;
+							system.content = `${MARKER$1}\n${prompt}\n\n${system.content}`;
 							changed = true;
 						}
 					} else {
 						data.messages.unshift({
 							role: "system",
-							content: `${MARKER}\n${prompt}`
+							content: `${MARKER$1}\n${prompt}`
 						});
 						changed = true;
 					}
 				}
 			} else if (typeof data.prompt === "string") {
 				if (!data.prompt.includes("[DS_CUSTOM_SYSTEM_PROMPT]")) {
-					data.prompt = `${MARKER}\n${prompt}\n\n${data.prompt}`;
+					data.prompt = `${MARKER$1}\n${prompt}\n\n${data.prompt}`;
 					changed = true;
 				}
 			} else return body;
@@ -127,12 +127,51 @@
 		}
 		return body;
 	}
+	var HISTORY_URL = /\/api\/v0\/chat\/history_messages(?:[?"#]|$)/i;
+	var MARKER = "[DS_CUSTOM_SYSTEM_PROMPT]";
+	function cleanMessage(msg) {
+		if (!msg || typeof msg !== "object") return;
+		const fragments = msg.fragments;
+		if (!Array.isArray(fragments)) return;
+		for (const f of fragments) {
+			if (!f || f.type !== "REQUEST" || typeof f.content !== "string") continue;
+			if (!f.content.startsWith(MARKER)) continue;
+			const rest = f.content.slice(25).replace(/^\n/, "");
+			const idx = rest.indexOf("\n\n");
+			f.content = (idx === -1 ? "" : rest.slice(idx + 2)).trim();
+		}
+	}
+	function cleanBizData(data) {
+		if (!data || typeof data !== "object") return;
+		const messages = data.chat_messages;
+		if (!Array.isArray(messages)) return;
+		for (const m of messages) cleanMessage(m);
+	}
+	function cleanPayload(json) {
+		if (!json || typeof json !== "object") return;
+		const data = json.data;
+		if (!data || typeof data !== "object") return;
+		cleanBizData(data.biz_data);
+	}
+	function cleanHistoryJson(text) {
+		try {
+			const json = JSON.parse(text);
+			cleanPayload(json);
+			return JSON.stringify(json);
+		} catch {
+			return text;
+		}
+	}
+	function isHistoryUrl(url) {
+		return HISTORY_URL.test(String(url));
+	}
 	function installInterceptors(W) {
 		const originalFetch = W.fetch;
 		if (typeof originalFetch === "function" && !originalFetch.__dsPromptPatched) {
 			const patchedFetch = function(input, init) {
+				let url = null;
 				try {
-					const url = typeof input === "string" ? input : input?.url;
+					url = typeof input === "string" ? input : input?.url;
 					if (init && typeof init.body === "string") init = {
 						...init,
 						body: modifyBody(init.body, url)
@@ -140,7 +179,13 @@
 				} catch (e) {
 					console.error("[DS自定义提示词] fetch 拦截异常", e);
 				}
-				return originalFetch.call(this, input, init);
+				const res = originalFetch.call(this, input, init);
+				if (!isHistoryUrl(url)) return res;
+				return res.then((r) => r.text().then((text) => new Response(cleanHistoryJson(text), {
+					status: r.status,
+					statusText: r.statusText,
+					headers: r.headers
+				})));
 			};
 			patchedFetch.__dsPromptPatched = true;
 			W.fetch = patchedFetch;
@@ -156,6 +201,25 @@
 			XHR.prototype.send = function(body) {
 				try {
 					body = modifyBody(body, this.__dsPromptUrl);
+					if (isHistoryUrl(this.__dsPromptUrl) && !this.__dsHistoryPatched) {
+						this.__dsHistoryPatched = true;
+						this.addEventListener("readystatechange", () => {
+							if (this.readyState !== 4 || this.status !== 200) return;
+							if (typeof this.responseText !== "string") return;
+							const cleaned = cleanHistoryJson(this.responseText);
+							if (cleaned === this.responseText) return;
+							Object.defineProperty(this, "responseText", {
+								value: cleaned,
+								configurable: true
+							});
+							if (this.responseType === "json") try {
+								Object.defineProperty(this, "response", {
+									value: JSON.parse(cleaned),
+									configurable: true
+								});
+							} catch {}
+						});
+					}
 				} catch (e) {
 					console.error("[DS自定义提示词] XHR 拦截异常", e);
 				}
