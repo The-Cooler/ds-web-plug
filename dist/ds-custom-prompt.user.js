@@ -21,7 +21,7 @@
 	var KEY = "ds_custom_prompt_presets_v2";
 	var ENABLE_KEY = "ds_custom_prompt_enabled_v2";
 	var DEFAULT_KEY = "ds_custom_prompt_default_v2";
-	var MARKER$2 = "[DS_CUSTOM_SYSTEM_PROMPT]";
+	var MARKER_HEAD = "[DS_CUSTOM_SYSTEM_PROMPT";
 	var DEFAULT_PRESETS = [{
 		id: "default",
 		name: "默认模板",
@@ -42,6 +42,30 @@
 	var isSessionInjected = (id) => {
 		if (id === void 0 || id === null) return false;
 		return Object.prototype.hasOwnProperty.call(readMap(), String(id));
+	};
+	var injectedWithoutSession = false;
+	var isInjectedWithoutSession = () => injectedWithoutSession;
+	var markInjectedWithoutSession = () => {
+		injectedWithoutSession = true;
+	};
+	var USED_KEY = "ds_custom_prompt_used_prompts_v1";
+	var getUsedPrompts = () => {
+		try {
+			const v = GM_getValue(USED_KEY, []);
+			return Array.isArray(v) ? v.filter((x) => typeof x === "string" && x) : [];
+		} catch {
+			return [];
+		}
+	};
+	var rememberPrompt = (prompt) => {
+		if (!prompt) return;
+		const list = getUsedPrompts().filter((p) => p !== prompt);
+		list.push(prompt);
+		try {
+			GM_setValue(USED_KEY, list.slice(-30));
+		} catch (e) {
+			console.error("[DS自定义提示词] 提示词记录保存失败", e);
+		}
 	};
 	var markSessionInjected = (id) => {
 		if (id === void 0 || id === null) return;
@@ -86,59 +110,77 @@
 		write(ENABLE_KEY, state.enabled);
 		write(DEFAULT_KEY, state.defaultId);
 	};
+	var HEAD = /^\[DS_CUSTOM_SYSTEM_PROMPT(?::(\d+))?\]/;
+	function buildInjected(prompt, text) {
+		return `${MARKER_HEAD}:${prompt.length}]\n${prompt}\n\n${text ?? ""}`;
+	}
+	function dropLeadingNewline(s) {
+		if (s.startsWith("\r\n")) return s.slice(2);
+		if (s.startsWith("\n")) return s.slice(1);
+		return s;
+	}
+	function dropSeparator(s) {
+		if (s.startsWith("\r\n\r\n")) return s.slice(4);
+		if (s.startsWith("\n\n")) return s.slice(2);
+		return dropLeadingNewline(s);
+	}
+	function stripInjected(text) {
+		if (typeof text !== "string" || !text.startsWith("[DS_CUSTOM_SYSTEM_PROMPT")) return text;
+		const m = HEAD.exec(text);
+		if (!m) return text;
+		let rest = dropLeadingNewline(text.slice(m[0].length));
+		if (m[1] !== void 0) {
+			const len = Number(m[1]);
+			if (!Number.isFinite(len) || len < 0 || rest.length < len) return text;
+			return dropSeparator(rest.slice(len));
+		}
+		const known = getUsedPrompts().slice().sort((a, b) => b.length - a.length);
+		for (const p of known) {
+			if (!p) continue;
+			if (rest.startsWith(p)) {
+				const tail = rest.slice(p.length);
+				if (tail.startsWith("\n\n") || tail.startsWith("\r\n\r\n")) return dropSeparator(tail);
+			}
+		}
+		const sep = rest.indexOf("\n\n");
+		if (sep === -1) return text;
+		return rest.slice(sep + 2);
+	}
+	function isInjected(text) {
+		return typeof text === "string" && text.startsWith("[DS_CUSTOM_SYSTEM_PROMPT");
+	}
 	function modifyBody(body, url) {
 		const prompt = getPrompt();
 		if (!prompt || typeof body !== "string") return body;
 		if (!TARGET_URL.test(String(url))) return body;
 		try {
 			const data = JSON.parse(body);
+			if (Array.isArray(data.messages)) return body;
+			if (typeof data.prompt !== "string") return body;
+			if (isInjected(data.prompt)) return body;
 			const sessionId = data.chat_session_id;
-			if (isSessionInjected(sessionId)) return body;
-			let changed = false;
-			if (Array.isArray(data.messages)) {
-				if (!data.messages.find((m) => m && m.role === "system" && typeof m.content === "string" && m.content.includes("[DS_CUSTOM_SYSTEM_PROMPT]"))) {
-					const system = data.messages.find((m) => m && m.role === "system");
-					if (system && typeof system.content === "string") {
-						if (!system.content.includes(prompt)) {
-							system.content = `${MARKER$2}\n${prompt}\n\n${system.content}`;
-							changed = true;
-						}
-					} else {
-						data.messages.unshift({
-							role: "system",
-							content: `${MARKER$2}\n${prompt}`
-						});
-						changed = true;
-					}
-				}
-			} else if (typeof data.prompt === "string") {
-				if (!data.prompt.includes("[DS_CUSTOM_SYSTEM_PROMPT]")) {
-					data.prompt = `${MARKER$2}\n${prompt}\n\n${data.prompt}`;
-					changed = true;
-				}
-			} else return body;
-			if (changed) {
-				markSessionInjected(sessionId);
-				log("已修改匹配请求", String(url));
-				return JSON.stringify(data);
-			}
+			const hasSession = sessionId !== void 0 && sessionId !== null;
+			if (hasSession ? isSessionInjected(sessionId) : isInjectedWithoutSession()) return body;
+			data.prompt = buildInjected(prompt, data.prompt);
+			if (hasSession) markSessionInjected(sessionId);
+			else markInjectedWithoutSession();
+			rememberPrompt(prompt);
+			log("已注入模板", String(url));
+			return JSON.stringify(data);
 		} catch (e) {
 			log("请求不是可识别的 JSON，跳过", String(url));
 		}
 		return body;
 	}
 	var HISTORY_URL = /\/api\/v0\/chat\/history_messages(?:[?"#]|$)/i;
-	var MARKER$1 = "[DS_CUSTOM_SYSTEM_PROMPT]";
 	function cleanMessage(msg) {
 		if (!msg || typeof msg !== "object") return;
 		const fragments = msg.fragments;
 		if (!Array.isArray(fragments)) return;
 		for (const f of fragments) {
 			if (!f || f.type !== "REQUEST" || typeof f.content !== "string") continue;
-			if (!f.content.startsWith(MARKER$1)) continue;
-			const rest = f.content.slice(25).replace(/^\n/, "");
-			const idx = rest.indexOf("\n\n");
-			f.content = (idx === -1 ? "" : rest.slice(idx + 2)).trim();
+			if (!isInjected(f.content)) continue;
+			f.content = stripInjected(f.content);
 		}
 	}
 	function cleanBizData(data) {
@@ -713,25 +755,145 @@
       #__ds_prompt_manager .ds-status { opacity:.7; font-size:12px; margin-top:8px; }
 `;
 	var PANEL_HTML = `
-      <button type="button" id="__ds_prompt_toggle">提示词</button>
+      <button type="button" id="__ds_prompt_toggle" data-i18n="toggle"></button>
       <section class="ds-prompt-window" hidden>
-        <div class="ds-title">自定义系统提示词</div>
-        <label>模板</label>
+        <div class="ds-title" data-i18n="title"></div>
+        <label data-i18n="label.template"></label>
         <select id="__ds_prompt_select"></select>
-        <label>模板名称</label>
-        <input id="__ds_prompt_name" placeholder="例如：论文润色">
-        <label>提示词内容</label>
-        <textarea id="__ds_prompt_text" placeholder="输入希望模型遵循的指令"></textarea>
-        <label><input id="__ds_prompt_enabled" type="checkbox" style="width:auto"> 启用后台注入</label>
+        <label data-i18n="label.name"></label>
+        <input id="__ds_prompt_name" data-i18n-placeholder="placeholder.name">
+        <label data-i18n="label.content"></label>
+        <textarea id="__ds_prompt_text" data-i18n-placeholder="placeholder.content"></textarea>
+        <label><input id="__ds_prompt_enabled" type="checkbox" style="width:auto"> <span data-i18n="enable.inject"></span></label>
+        <label><input id="__ds_pet_enabled" type="checkbox" style="width:auto"> <span data-i18n="enable.pet"></span></label>
         <div class="ds-actions">
-          <button type="button" id="__ds_prompt_new">新建</button>
-          <button type="button" id="__ds_prompt_save">保存模板</button>
-          <button type="button" id="__ds_prompt_default">设为默认</button>
-          <button type="button" id="__ds_prompt_delete">删除</button>
+          <button type="button" id="__ds_prompt_new" data-i18n="action.new"></button>
+          <button type="button" id="__ds_prompt_save" data-i18n="action.save"></button>
+          <button type="button" id="__ds_prompt_default" data-i18n="action.default"></button>
+          <button type="button" id="__ds_prompt_delete" data-i18n="action.delete"></button>
         </div>
         <div class="ds-status" id="__ds_prompt_status"></div>
       </section>
 `;
+	var ENABLED_KEY = "ds_pet_enabled_v1";
+	var isPetEnabled = () => {
+		try {
+			return GM_getValue(ENABLED_KEY, true) !== false;
+		} catch {
+			return true;
+		}
+	};
+	var setPetEnabled = (enabled) => {
+		try {
+			GM_setValue(ENABLED_KEY, !!enabled);
+		} catch (e) {
+			console.error("[DS大肥鱼] 开关保存失败", e);
+		}
+	};
+	var POSITION_KEY$1 = "ds_pet_position_v1";
+	var anchor = null;
+	var loaded = false;
+	function load() {
+		if (loaded) return;
+		loaded = true;
+		try {
+			const raw = GM_getValue(POSITION_KEY$1, null);
+			if (raw && typeof raw === "object") anchor = {
+				rx: raw.rx,
+				ry: raw.ry
+			};
+		} catch {}
+	}
+	function setPetAnchor(x, y) {
+		anchor = {
+			x,
+			y,
+			rx: x / window.innerWidth,
+			ry: y / window.innerHeight
+		};
+	}
+	function getPetAnchor() {
+		load();
+		if (!anchor) return null;
+		return {
+			x: anchor.rx * window.innerWidth,
+			y: anchor.ry * window.innerHeight
+		};
+	}
+	var zh = {
+		"toggle": "提示词",
+		"title": "自定义系统提示词",
+		"label.template": "模板",
+		"label.name": "模板名称",
+		"label.content": "提示词内容",
+		"placeholder.name": "例如：论文润色",
+		"placeholder.content": "输入希望模型遵循的指令",
+		"enable.inject": "启用后台注入",
+		"enable.pet": "显示大肥鱼动画",
+		"action.new": "新建",
+		"action.save": "保存模板",
+		"action.default": "设为默认",
+		"action.delete": "删除",
+		"action.close": "关闭",
+		"menu.title": "大肥鱼",
+		"menu.prompt": "提示词",
+		"menu.hide": "关闭动画",
+		"menu.home": "回到初始位置",
+		"status.injectOn": "后台注入已启用",
+		"status.injectOff": "后台注入已关闭",
+		"status.petOn": "大肥鱼动画已开启",
+		"status.petOff": "大肥鱼动画已关闭",
+		"status.editThenSave": "编辑内容后点击“保存模板”",
+		"status.needNew": "请先新建模板",
+		"status.newTemplate": "新模板",
+		"status.untitled": "未命名模板",
+		"status.saved": "已保存",
+		"status.needSelect": "请先选择模板",
+		"status.defaultSet": "默认模板已设置：",
+		"status.nothingToDelete": "没有可删除的模板",
+		"status.confirmDelete": "确定删除当前模板？",
+		"status.deleted": "已删除"
+	};
+	var dict = (navigator.language || "").toLowerCase().startsWith("zh") ? zh : {
+		"toggle": "Prompts",
+		"title": "Custom System Prompt",
+		"label.template": "Template",
+		"label.name": "Template name",
+		"label.content": "Prompt",
+		"placeholder.name": "e.g. Paper polishing",
+		"placeholder.content": "Instructions the model should follow",
+		"enable.inject": "Enable background injection",
+		"enable.pet": "Show pet animation",
+		"action.new": "New",
+		"action.save": "Save",
+		"action.default": "Set default",
+		"action.delete": "Delete",
+		"action.close": "Close",
+		"menu.title": "Pet",
+		"menu.prompt": "Prompts",
+		"menu.hide": "Hide animation",
+		"menu.home": "Reset position",
+		"status.injectOn": "Background injection enabled",
+		"status.injectOff": "Background injection disabled",
+		"status.petOn": "Pet animation enabled",
+		"status.petOff": "Pet animation disabled",
+		"status.editThenSave": "Edit the content, then click Save",
+		"status.needNew": "Create a template first",
+		"status.newTemplate": "New template",
+		"status.untitled": "Untitled template",
+		"status.saved": "Saved",
+		"status.needSelect": "Select a template first",
+		"status.defaultSet": "Default template set: ",
+		"status.nothingToDelete": "No template to delete",
+		"status.confirmDelete": "Delete the current template?",
+		"status.deleted": "Deleted"
+	};
+	var t = (key) => dict[key] ?? zh[key] ?? key;
+	function applyI18n(root) {
+		if (!root) return;
+		for (const el of root.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n);
+		for (const el of root.querySelectorAll("[data-i18n-placeholder]")) el.placeholder = t(el.dataset.i18nPlaceholder);
+	}
 	var panelRoot = null;
 	function ensurePanel() {
 		if (panelRoot) return panelRoot;
@@ -743,15 +905,12 @@
 		root.innerHTML = PANEL_HTML;
 		document.body.appendChild(root);
 		panelRoot = root;
+		applyI18n(root);
 		const $ = (id) => root.querySelector("#" + id);
 		const section = root.querySelector(".ds-prompt-window");
 		section.hidden = true;
 		const toggle = $("__ds_prompt_toggle");
 		toggle.hidden = true;
-		toggle.addEventListener("click", () => {
-			section.hidden = !section.hidden;
-			if (!section.hidden) refreshSelect();
-		});
 		let selectedId = state.presets[0]?.id || "";
 		function status(text) {
 			$("__ds_prompt_status").textContent = text;
@@ -773,31 +932,31 @@
 			$("__ds_prompt_name").value = p?.name || "";
 			$("__ds_prompt_text").value = p?.prompt || "";
 			$("__ds_prompt_enabled").checked = state.enabled;
+			$("__ds_pet_enabled").checked = isPetEnabled();
 		}
 		const close = document.createElement("button");
 		close.type = "button";
 		close.id = "__ds_prompt_manager_close";
-		close.textContent = "关闭";
+		close.textContent = t("action.close");
 		close.style.marginBottom = "10px";
 		close.addEventListener("click", () => {
 			section.hidden = true;
 		});
 		section.prepend(close);
-		const title = root.querySelector(".ds-title");
-		title.style.cursor = "move";
-		title.style.userSelect = "none";
 		let dragStart = null;
-		title.addEventListener("pointerdown", (e) => {
+		section.addEventListener("pointerdown", (e) => {
 			if (e.button !== 0) return;
+			if (e.target.closest("button, input, textarea, select, label")) return;
 			const rect = section.getBoundingClientRect();
 			dragStart = {
 				dx: e.clientX - rect.left,
 				dy: e.clientY - rect.top
 			};
-			title.setPointerCapture(e.pointerId);
+			section.setPointerCapture(e.pointerId);
+			section.style.cursor = "move";
 			e.preventDefault();
 		});
-		title.addEventListener("pointermove", (e) => {
+		section.addEventListener("pointermove", (e) => {
 			if (!dragStart) return;
 			const left = Math.max(0, Math.min(e.clientX - dragStart.dx, window.innerWidth - section.offsetWidth));
 			const top = Math.max(0, Math.min(e.clientY - dragStart.dy, window.innerHeight - section.offsetHeight));
@@ -806,15 +965,21 @@
 			section.style.right = "auto";
 			section.style.bottom = "auto";
 		});
-		title.addEventListener("pointerup", () => {
+		const endDrag = () => {
 			dragStart = null;
-		});
-		title.addEventListener("pointercancel", () => {
-			dragStart = null;
-		});
+			section.style.cursor = "";
+		};
+		section.addEventListener("pointerup", endDrag);
+		section.addEventListener("pointercancel", endDrag);
 		$("__ds_prompt_toggle").addEventListener("click", () => {
 			section.hidden = !section.hidden;
 			if (!section.hidden) refreshSelect();
+		});
+		$("__ds_pet_enabled").addEventListener("change", (e) => {
+			const on = e.target.checked;
+			setPetEnabled(on);
+			window.dispatchEvent(new CustomEvent("ds-pet-toggle"));
+			status(t(on ? "status.petOn" : "status.petOff"));
 		});
 		$("__ds_prompt_select").addEventListener("change", (e) => {
 			selectedId = e.target.value;
@@ -823,44 +988,44 @@
 		$("__ds_prompt_enabled").addEventListener("change", (e) => {
 			state.enabled = e.target.checked;
 			save();
-			status(state.enabled ? "后台注入已启用" : "后台注入已关闭");
+			status(t(state.enabled ? "status.injectOn" : "status.injectOff"));
 		});
 		$("__ds_prompt_new").addEventListener("click", () => {
 			selectedId = "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
 			state.presets.push({
 				id: selectedId,
-				name: "新模板",
+				name: t("status.newTemplate"),
 				prompt: ""
 			});
 			refreshSelect();
 			$("__ds_prompt_name").focus();
-			status("编辑内容后点击“保存模板”");
+			status(t("status.editThenSave"));
 		});
 		$("__ds_prompt_save").addEventListener("click", () => {
 			const p = state.presets.find((p) => p.id === selectedId);
-			if (!p) return status("请先新建模板");
-			p.name = $("__ds_prompt_name").value.trim() || "未命名模板";
+			if (!p) return status(t("status.needNew"));
+			p.name = $("__ds_prompt_name").value.trim() || t("status.untitled");
 			p.prompt = $("__ds_prompt_text").value;
 			state.enabled = $("__ds_prompt_enabled").checked;
 			save();
 			refreshSelect();
-			status("已保存");
+			status(t("status.saved"));
 		});
 		$("__ds_prompt_default").addEventListener("click", () => {
-			if (!state.presets.some((p) => p.id === selectedId)) return status("请先选择模板");
+			if (!state.presets.some((p) => p.id === selectedId)) return status(t("status.needSelect"));
 			state.defaultId = selectedId;
 			save();
-			status("默认模板已设置：" + (state.presets.find((p) => p.id === state.defaultId)?.name || ""));
+			status(t("status.defaultSet") + (state.presets.find((p) => p.id === state.defaultId)?.name || ""));
 		});
 		$("__ds_prompt_delete").addEventListener("click", () => {
-			if (!state.presets.some((p) => p.id === selectedId)) return status("没有可删除的模板");
-			if (!confirm("确定删除当前模板？")) return;
+			if (!state.presets.some((p) => p.id === selectedId)) return status(t("status.nothingToDelete"));
+			if (!confirm(t("status.confirmDelete"))) return;
 			state.presets = state.presets.filter((p) => p.id !== selectedId);
 			if (state.defaultId === selectedId) state.defaultId = state.presets[0]?.id || "";
 			selectedId = state.presets[0]?.id || "";
 			save();
 			refreshSelect();
-			status("已删除");
+			status(t("status.deleted"));
 		});
 		refreshSelect();
 		return root;
@@ -884,36 +1049,32 @@
 		if (!toggle) return;
 		if (root.parentElement !== document.body) document.body.appendChild(root);
 		root.style.position = "fixed";
-		root.style.right = "24px";
-		root.style.bottom = "100px";
-		root.style.left = "auto";
-		root.style.top = "auto";
+		root.style.right = "auto";
+		root.style.bottom = "auto";
+		root.style.left = anchorLeft(anchorX()) + "px";
+		root.style.top = anchorTop(anchorY()) + "px";
 		toggle.hidden = false;
+		root.querySelector("#__ds_pet_enabled").checked = isPetEnabled();
+	}
+	function anchorX() {
+		const a = getPetAnchor();
+		return a ? a.x : window.innerWidth - PET_CONFIG.size;
+	}
+	function anchorY() {
+		const a = getPetAnchor();
+		return a ? a.y : PET_CONFIG.position.marginY;
+	}
+	function anchorLeft(x) {
+		return Math.max(0, Math.min(x, window.innerWidth - 80));
+	}
+	function anchorTop(y) {
+		return Math.max(0, Math.min(y, window.innerHeight - 40));
 	}
 	function unmountPromptButton() {
 		if (!panelRoot) return;
 		const toggle = panelRoot.querySelector("#__ds_prompt_toggle");
 		if (toggle) toggle.hidden = true;
-		panelRoot.style.position = "";
-		panelRoot.style.right = "";
-		panelRoot.style.bottom = "";
-		panelRoot.querySelector(".ds-prompt-window").hidden = true;
 	}
-	var ENABLED_KEY = "ds_pet_enabled_v1";
-	var isPetEnabled = () => {
-		try {
-			return GM_getValue(ENABLED_KEY, true) !== false;
-		} catch {
-			return true;
-		}
-	};
-	var setPetEnabled = (enabled) => {
-		try {
-			GM_setValue(ENABLED_KEY, !!enabled);
-		} catch (e) {
-			console.error("[DS大肥鱼] 开关保存失败", e);
-		}
-	};
 	var { HIT_BOX, CANVAS_H, FEET_Y, DRAG_THRESHOLD, SLINGSHOT_DOUBLE_MS } = PET_GEOMETRY;
 	var POSITION_KEY = "ds_pet_position_v1";
 	var CSS = `
@@ -999,24 +1160,29 @@
 		document.body.appendChild(root);
 		const saved = readPosition();
 		const placeAt = (rx, ry) => {
-			root.style.left = rx * window.innerWidth - halfW + "px";
-			root.style.top = ry * window.innerHeight - halfH + "px";
+			const left = rx * window.innerWidth - halfW;
+			const top = ry * window.innerHeight - halfH;
+			root.style.left = left + "px";
+			root.style.top = top + "px";
 			root.style.right = "auto";
 			root.style.bottom = "auto";
 			customPos = {
 				rx,
 				ry
 			};
+			setPetAnchor(left, top);
 		};
 		let customPos = null;
 		if (saved) placeAt(saved.rx, saved.ry);
 		else {
 			const { corner, marginX, marginY } = PET_CONFIG.position;
-			if (corner === "top-right") {
-				root.style.right = marginX + "px";
-				root.style.bottom = "auto";
-			} else if (corner === "top-left") root.style.left = marginX + "px";
-			root.style.top = marginY + "px";
+			const left = corner.endsWith("right") ? window.innerWidth - size - marginX : marginX;
+			const top = corner.startsWith("bottom") ? window.innerHeight - size * 9 / 16 - marginY : marginY;
+			root.style.left = left + "px";
+			root.style.top = top + "px";
+			root.style.right = "auto";
+			root.style.bottom = "auto";
+			setPetAnchor(left, top);
 		}
 		let anim = animations.idle[0] ?? "";
 		let once = true;
@@ -1188,6 +1354,7 @@
 				root.style.top = py - halfH + "px";
 				root.style.right = "auto";
 				root.style.bottom = "auto";
+				setPetAnchor(px - halfW, py - halfH);
 				boxPx = {
 					x: px - halfW,
 					y: py - halfH
@@ -1260,6 +1427,7 @@
 				root.style.top = y + "px";
 				root.style.right = "auto";
 				root.style.bottom = "auto";
+				setPetAnchor(x, y);
 				dragFollow = requestAnimationFrame(step);
 			};
 			dragFollow = requestAnimationFrame(step);
@@ -1320,6 +1488,7 @@
 				root.style.top = res.y + "px";
 				root.style.right = "auto";
 				root.style.bottom = "auto";
+				setPetAnchor(res.x, res.y);
 				boxPx = {
 					x: res.x,
 					y: res.y
@@ -1475,17 +1644,17 @@
 			menuEl.style.top = Math.min(y, window.innerHeight - 320) + "px";
 			const title = document.createElement("div");
 			title.className = "pet-menu-title";
-			title.textContent = "大肥鱼";
+			title.textContent = t("menu.title");
 			menuEl.appendChild(title);
-			menuEl.appendChild(menuItem("提示词", () => {
+			menuEl.appendChild(menuItem(t("menu.prompt"), () => {
 				openPromptPanel(x, y);
 			}));
-			menuEl.appendChild(menuItem("关闭动画", () => {
+			menuEl.appendChild(menuItem(t("menu.hide"), () => {
 				setPetEnabled(false);
 				unmountPet();
 				window.dispatchEvent(new CustomEvent("ds-pet-disabled"));
 			}));
-			menuEl.appendChild(menuItem("回到初始位置", () => {
+			menuEl.appendChild(menuItem(t("menu.home"), () => {
 				customPos = null;
 				root.style.left = "auto";
 				root.style.right = PET_CONFIG.position.marginX + "px";
@@ -1518,21 +1687,11 @@
 		switchTo(anim, once);
 		log("宠物已启动");
 	}
-	var MARKER = "[DS_CUSTOM_SYSTEM_PROMPT]";
 	var SKIP_IDS = new Set([
 		"__ds_prompt_manager",
 		"__ds_pet_root",
 		"__ds_pet_menu"
 	]);
-	function strip(text) {
-		const idx = text.indexOf(MARKER);
-		if (idx === -1) return text;
-		const before = text.slice(0, idx);
-		const rest = text.slice(idx + 25).replace(/^\n/, "");
-		const sep = rest.indexOf("\n\n");
-		const cleaned = sep === -1 ? "" : rest.slice(sep + 2);
-		return before.trim() === "" ? cleaned : text;
-	}
 	function shouldSkip(node) {
 		let el = node.parentElement;
 		while (el) {
@@ -1542,17 +1701,17 @@
 		return false;
 	}
 	function scrubRoot(root) {
-		if (!root || !root.textContent?.includes(MARKER)) return;
+		if (!root || !root.textContent?.includes("[DS_CUSTOM_SYSTEM_PROMPT")) return;
 		const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
 		const targets = [];
 		let node;
 		while (node = walker.nextNode()) {
-			if (!node.data.includes(MARKER)) continue;
+			if (!isInjected(node.data)) continue;
 			if (shouldSkip(node)) continue;
 			targets.push(node);
 		}
 		for (const n of targets) {
-			const next = strip(n.data);
+			const next = stripInjected(n.data);
 			if (next !== n.data) n.data = next;
 		}
 	}
@@ -1564,7 +1723,7 @@
 		setTimeout(() => {
 			scheduled = false;
 			scrubRoot(document.body);
-		}, 800);
+		}, 300);
 	}
 	function installScrubber() {
 		if (!document.body || scrubInstalled) return;
@@ -1572,8 +1731,10 @@
 		scrubRoot(document.body);
 		new MutationObserver(schedule).observe(document.body, {
 			childList: true,
-			subtree: true
+			subtree: true,
+			characterData: true
 		});
+		setInterval(() => scrubRoot(document.body), 2e3);
 	}
 	(() => {
 		"use strict";
@@ -1603,6 +1764,7 @@
 			}
 		});
 		window.addEventListener("ds-pet-disabled", syncEntry);
+		window.addEventListener("ds-pet-toggle", syncEntry);
 		log("脚本已启动；当前默认模板：", state.defaultId);
 	})();
 })();

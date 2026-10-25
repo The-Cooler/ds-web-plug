@@ -18,6 +18,39 @@ export const isSessionInjected = id => {
   return Object.prototype.hasOwnProperty.call(readMap(), String(id));
 };
 
+// 旧会话（无 session id）在脚本层面只注入一次；启用注入后清空，新开的会话不受影响。
+let injectedWithoutSession = false;
+
+export const isInjectedWithoutSession = () => injectedWithoutSession;
+
+export const markInjectedWithoutSession = () => {
+  injectedWithoutSession = true;
+};
+
+// 用过的提示词：清历史时用来识别旧格式（无长度）的注入边界。
+const USED_KEY = 'ds_custom_prompt_used_prompts_v1';
+const MAX_USED = 30;
+
+export const getUsedPrompts = () => {
+  try {
+    const v = GM_getValue(USED_KEY, []);
+    return Array.isArray(v) ? v.filter(x => typeof x === 'string' && x) : [];
+  } catch {
+    return [];
+  }
+};
+
+export const rememberPrompt = prompt => {
+  if (!prompt) return;
+  const list = getUsedPrompts().filter(p => p !== prompt);
+  list.push(prompt);
+  try {
+    GM_setValue(USED_KEY, list.slice(-MAX_USED));
+  } catch (e) {
+    console.error('[DS自定义提示词] 提示词记录保存失败', e);
+  }
+};
+
 export const markSessionInjected = id => {
   if (id === undefined || id === null) return;
   const map = readMap();
@@ -33,8 +66,7 @@ export const markSessionInjected = id => {
   }
 };
 
-export const read = (key, fallback) => {
-  try {
+export const read = (key, fallback) => {  try {
     const v = GM_getValue(key, fallback);
     return v === undefined ? fallback : v;
   } catch {

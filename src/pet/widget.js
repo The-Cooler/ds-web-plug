@@ -24,7 +24,9 @@ import {
 } from './physics.js';
 import { log } from '../store.js';
 import { openPromptPanel } from '../ui/panel.js';
+import { t } from '../i18n.js';
 import { setPetEnabled } from './state.js';
+import { setPetAnchor } from './anchor.js';
 
 const { HIT_BOX, CANVAS_H, FEET_Y, DRAG_THRESHOLD, SLINGSHOT_DOUBLE_MS } = PET_GEOMETRY;
 const POSITION_KEY = 'ds_pet_position_v1';
@@ -127,24 +129,27 @@ export function mountPet() {
   // 位置：优先回读上次落点，否则用配置角落。
   const saved = readPosition();
   const placeAt = (rx, ry) => {
-    root.style.left = rx * window.innerWidth - halfW + 'px';
-    root.style.top = ry * window.innerHeight - halfH + 'px';
+    const left = rx * window.innerWidth - halfW;
+    const top = ry * window.innerHeight - halfH;
+    root.style.left = left + 'px';
+    root.style.top = top + 'px';
     root.style.right = 'auto';
     root.style.bottom = 'auto';
     customPos = { rx, ry };
+    setPetAnchor(left, top);
   };
   let customPos = null;
   if (saved) {
     placeAt(saved.rx, saved.ry);
   } else {
     const { corner, marginX, marginY } = PET_CONFIG.position;
-    if (corner === 'top-right') {
-      root.style.right = marginX + 'px';
-      root.style.bottom = 'auto';
-    } else if (corner === 'top-left') {
-      root.style.left = marginX + 'px';
-    }
-    root.style.top = marginY + 'px';
+    const left = corner.endsWith('right') ? window.innerWidth - size - marginX : marginX;
+    const top = corner.startsWith('bottom') ? window.innerHeight - (size * 9) / 16 - marginY : marginY;
+    root.style.left = left + 'px';
+    root.style.top = top + 'px';
+    root.style.right = 'auto';
+    root.style.bottom = 'auto';
+    setPetAnchor(left, top);
   }
 
   // 播放状态
@@ -331,6 +336,7 @@ export function mountPet() {
       root.style.top = py - halfH + 'px';
       root.style.right = 'auto';
       root.style.bottom = 'auto';
+      setPetAnchor(px - halfW, py - halfH);
       boxPx = { x: px - halfW, y: py - halfH };
       if (!el.paused && !el.ended) requestAnimationFrame(step);
       else {
@@ -395,6 +401,7 @@ export function mountPet() {
       root.style.top = y + 'px';
       root.style.right = 'auto';
       root.style.bottom = 'auto';
+      setPetAnchor(x, y);
       dragFollow = requestAnimationFrame(step);
     };
     dragFollow = requestAnimationFrame(step);
@@ -442,6 +449,7 @@ export function mountPet() {
       root.style.top = res.y + 'px';
       root.style.right = 'auto';
       root.style.bottom = 'auto';
+      setPetAnchor(res.x, res.y);
       boxPx = { x: res.x, y: res.y };
       customPos = {
         rx: (res.x + halfW) / window.innerWidth,
@@ -596,20 +604,20 @@ export function mountPet() {
 
     const title = document.createElement('div');
     title.className = 'pet-menu-title';
-    title.textContent = '大肥鱼';
+    title.textContent = t('menu.title');
     menuEl.appendChild(title);
 
-    menuEl.appendChild(menuItem('提示词', () => {
+    menuEl.appendChild(menuItem(t('menu.prompt'), () => {
       openPromptPanel(x, y);
     }));
 
-    menuEl.appendChild(menuItem('关闭动画', () => {
+    menuEl.appendChild(menuItem(t('menu.hide'), () => {
       setPetEnabled(false);
       unmountPet();
       window.dispatchEvent(new CustomEvent('ds-pet-disabled'));
     }));
 
-    menuEl.appendChild(menuItem('回到初始位置', () => {
+    menuEl.appendChild(menuItem(t('menu.home'), () => {
       customPos = null;
       root.style.left = 'auto';
       root.style.right = PET_CONFIG.position.marginX + 'px';
@@ -642,7 +650,6 @@ export function mountPet() {
     if (customPos) placeAt(customPos.rx, customPos.ry);
     closeMenu();
   });
-
   // 启动
   switchTo(anim, once);
   log('宠物已启动');

@@ -34,21 +34,22 @@ export const PANEL_STYLE = `
 `;
 
 export const PANEL_HTML = `
-      <button type="button" id="__ds_prompt_toggle">提示词</button>
+      <button type="button" id="__ds_prompt_toggle" data-i18n="toggle"></button>
       <section class="ds-prompt-window" hidden>
-        <div class="ds-title">自定义系统提示词</div>
-        <label>模板</label>
+        <div class="ds-title" data-i18n="title"></div>
+        <label data-i18n="label.template"></label>
         <select id="__ds_prompt_select"></select>
-        <label>模板名称</label>
-        <input id="__ds_prompt_name" placeholder="例如：论文润色">
-        <label>提示词内容</label>
-        <textarea id="__ds_prompt_text" placeholder="输入希望模型遵循的指令"></textarea>
-        <label><input id="__ds_prompt_enabled" type="checkbox" style="width:auto"> 启用后台注入</label>
+        <label data-i18n="label.name"></label>
+        <input id="__ds_prompt_name" data-i18n-placeholder="placeholder.name">
+        <label data-i18n="label.content"></label>
+        <textarea id="__ds_prompt_text" data-i18n-placeholder="placeholder.content"></textarea>
+        <label><input id="__ds_prompt_enabled" type="checkbox" style="width:auto"> <span data-i18n="enable.inject"></span></label>
+        <label><input id="__ds_pet_enabled" type="checkbox" style="width:auto"> <span data-i18n="enable.pet"></span></label>
         <div class="ds-actions">
-          <button type="button" id="__ds_prompt_new">新建</button>
-          <button type="button" id="__ds_prompt_save">保存模板</button>
-          <button type="button" id="__ds_prompt_default">设为默认</button>
-          <button type="button" id="__ds_prompt_delete">删除</button>
+          <button type="button" id="__ds_prompt_new" data-i18n="action.new"></button>
+          <button type="button" id="__ds_prompt_save" data-i18n="action.save"></button>
+          <button type="button" id="__ds_prompt_default" data-i18n="action.default"></button>
+          <button type="button" id="__ds_prompt_delete" data-i18n="action.delete"></button>
         </div>
         <div class="ds-status" id="__ds_prompt_status"></div>
       </section>

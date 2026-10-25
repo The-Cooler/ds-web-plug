@@ -39,8 +39,8 @@ import { installScrubber } from './scrub.js';
     }
   });
 
-  // 右键菜单「关闭动画」后立刻切回提示词按钮。
   window.addEventListener('ds-pet-disabled', syncEntry);
+  window.addEventListener('ds-pet-toggle', syncEntry);
 
   log('脚本已启动；当前默认模板：', state.defaultId);
 })();

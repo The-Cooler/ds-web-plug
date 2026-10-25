@@ -2,7 +2,8 @@ export const KEY = 'ds_custom_prompt_presets_v2';
 export const ENABLE_KEY = 'ds_custom_prompt_enabled_v2';
 export const DEFAULT_KEY = 'ds_custom_prompt_default_v2';
 
-export const MARKER = '[DS_CUSTOM_SYSTEM_PROMPT]';
+// 前缀固定；实际写入时在末尾追加 `:<长度>`，见 promptFormat.buildInjected。
+export const MARKER_HEAD = '[DS_CUSTOM_SYSTEM_PROMPT';
 
 export const DEFAULT_PRESETS = [
   { id: 'default', name: '默认模板', prompt: '请准确理解用户的要求，直接回答问题。' },
