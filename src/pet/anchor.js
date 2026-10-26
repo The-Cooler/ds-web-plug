@@ -1,7 +1,7 @@
 /**
  * 动画与提示词按钮共用的位置。
  * 动画每次改变落点（拖动、抛掷、走位、缩放）时写入，按钮按这份坐标放置，
- * 从而两者始终处在同一个位置。刷新后从 GM 存储里读回落点。
+ * 拖动按钮同样写这份坐标，从而两者始终处在同一个位置。刷新后从 GM 存储里读回落点。
  */
 const POSITION_KEY = 'ds_pet_position_v1';
 
@@ -19,12 +19,24 @@ function load() {
 
 /** 记录动画包围盒左上角（px，同时存归一化坐标，视口变化时按比例还原）。 */
 export function setPetAnchor(x, y) {
+  loaded = true; // 内存值优先，避免随后的读取被存储里的旧坐标覆盖
   anchor = {
     x,
     y,
     rx: x / window.innerWidth,
     ry: y / window.innerHeight,
   };
+}
+
+/** 把当前锚点写回存储，供下次挂载使用。 */
+export function persistAnchor() {
+  load();
+  if (!anchor) return;
+  try {
+    GM_setValue(POSITION_KEY, { rx: anchor.rx, ry: anchor.ry });
+  } catch (e) {
+    console.error('[DS自定义提示词] 位置保存失败', e);
+  }
 }
 
 /** 读取动画当前包围盒左上角；没有位置记录时返回 null。 */

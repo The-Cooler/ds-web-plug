@@ -8,6 +8,7 @@ const zh = {
   'label.template': '模板',
   'label.name': '模板名称',
   'label.content': '提示词内容',
+  'label.inherits': '继承模板（可多选）',
   'placeholder.name': '例如：论文润色',
   'placeholder.content': '输入希望模型遵循的指令',
   'enable.inject': '启用后台注入',
@@ -35,6 +36,16 @@ const zh = {
   'status.nothingToDelete': '没有可删除的模板',
   'status.confirmDelete': '确定删除当前模板？',
   'status.deleted': '已删除',
+  'status.noInherits': '没有其他模板可继承',
+  'help.title': '使用说明',
+  'help.inject': '开启「启用后台注入」后，新会话的第一条消息会带上当前默认模板；同一会话后续消息不再重复注入。',
+  'help.inherit': '「继承模板」可多选：被选模板的正文会按顺序拼在本模板正文之前；删除模板时会自动从其他模板的继承列表移除。',
+  'help.pet': '取消「显示大肥鱼动画」会移除桌宠；之后想找回，双击提示词按钮即可。',
+  'help.close': '点面板外任意位置、按 Esc，或再次点击提示词按钮都可以关闭面板。',
+  'label.language': '界面语言',
+  'lang.auto': '跟随浏览器',
+  'lang.zh': '中文',
+  'lang.en': 'English',
 };
 
 const en = {
@@ -43,6 +54,7 @@ const en = {
   'label.template': 'Template',
   'label.name': 'Template name',
   'label.content': 'Prompt',
+  'label.inherits': 'Inherit templates (multi-select)',
   'placeholder.name': 'e.g. Paper polishing',
   'placeholder.content': 'Instructions the model should follow',
   'enable.inject': 'Enable background injection',
@@ -70,11 +82,50 @@ const en = {
   'status.nothingToDelete': 'No template to delete',
   'status.confirmDelete': 'Delete the current template?',
   'status.deleted': 'Deleted',
+  'status.noInherits': 'No other templates to inherit',
+  'help.title': 'How it works',
+  'help.inject': 'With background injection on, the first message of each new session carries the default template; later messages in the same session are left untouched.',
+  'help.inherit': 'Inherit templates (multi-select): their text is prepended in order to this template; deleting a template removes it from every inheritance list.',
+  'help.pet': 'Unchecking "Show pet animation" removes the pet; double-click the prompt button to bring it back.',
+  'help.close': 'Click outside, press Esc, or click the prompt button again to close.',
+  'label.language': 'Language',
+  'lang.auto': 'Follow browser',
+  'lang.zh': '中文',
+  'lang.en': 'English',
 };
 
-const dict = (navigator.language || '').toLowerCase().startsWith('zh') ? zh : en;
+const LANG_KEY = 'ds_prompt_lang_v1';
 
-export const t = key => (dict[key] ?? zh[key] ?? key);
+/** 当前语言：auto（跟随浏览器）/ zh / en。 */
+export function getLangSetting() {
+  try {
+    const v = GM_getValue(LANG_KEY, 'auto');
+    return v === 'zh' || v === 'en' ? v : 'auto';
+  } catch {
+    return 'auto';
+  }
+}
+
+export function setLangSetting(lang) {
+  try {
+    GM_setValue(LANG_KEY, lang === 'zh' || lang === 'en' ? lang : 'auto');
+  } catch (e) {
+    console.error('[DS自定义提示词] 语言设置保存失败', e);
+  }
+}
+
+const browserIsZh = () => (navigator.language || '').toLowerCase().startsWith('zh');
+
+const currentDict = () => {
+  const setting = getLangSetting();
+  const useZh = setting === 'zh' || (setting === 'auto' && browserIsZh());
+  return useZh ? zh : en;
+};
+
+export const t = key => {
+  const dict = currentDict();
+  return dict[key] ?? zh[key] ?? key;
+};
 
 /** 把带 data-i18n / data-i18n-placeholder 的节点按当前语言填充。 */
 export function applyI18n(root) {

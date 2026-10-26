@@ -138,6 +138,7 @@ export function mountPet() {
     customPos = { rx, ry };
     setPetAnchor(left, top);
   };
+
   let customPos = null;
   if (saved) {
     placeAt(saved.rx, saved.ry);

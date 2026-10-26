@@ -85,4 +85,6 @@ tmp/                 参考文件（网页源码、dsh-pet 仓库）
 
 ## 许可
 
-代码 MIT。宠物素材版权归 dsh-pet 原作者，禁止商用；二创在公开渠道须署名 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)。
+本项目同样以 **MIT License** 开源，协议全文见仓库根目录的 [LICENSE](LICENSE)，Copyright (c) 2026 LLL。
+
+宠物素材版权归 dsh-pet 原作者，禁止商用；二创在公开渠道须署名 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)。

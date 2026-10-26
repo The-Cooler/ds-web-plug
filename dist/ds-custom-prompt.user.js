@@ -1,14 +1,16 @@
 // ==UserScript==
 // @name         DeepSeek 大肥鱼插件
 // @namespace    deepseek-custom-prompt
-// @version      2.2.2
+// @version      2.3.2
 // @author       LLL
 // @description  自定义提示词模板 + 桌面宠物挂件
+// @license      MIT
 // @downloadURL  https://gitee.com/Ljunyang114/ds-web-plug/raw/main/dist/ds-custom-prompt.user.js
 // @updateURL    https://gitee.com/Ljunyang114/ds-web-plug/raw/main/dist/ds-custom-prompt.user.js
 // @match        https://chat.deepseek.com/*
 // @connect      gitee.com
 // @connect      raw.githubusercontent.com
+// @grant        GM_deleteValue
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -29,25 +31,6 @@
 	}];
 	var TARGET_URL = /\/api\/v0\/chat\/completion(?:[?"#]|$)|\/chat\/completions|\/v1\/chat\/completions/i;
 	var log = (...args) => console.info("[DS自定义提示词]", ...args);
-	var INJECTED_KEY = "ds_custom_prompt_injected_sessions_v1";
-	var MAX_REMEMBERED = 300;
-	var readMap = () => {
-		try {
-			const v = GM_getValue(INJECTED_KEY, {});
-			return v && typeof v === "object" && !Array.isArray(v) ? v : {};
-		} catch {
-			return {};
-		}
-	};
-	var isSessionInjected = (id) => {
-		if (id === void 0 || id === null) return false;
-		return Object.prototype.hasOwnProperty.call(readMap(), String(id));
-	};
-	var injectedWithoutSession = false;
-	var isInjectedWithoutSession = () => injectedWithoutSession;
-	var markInjectedWithoutSession = () => {
-		injectedWithoutSession = true;
-	};
 	var USED_KEY = "ds_custom_prompt_used_prompts_v1";
 	var getUsedPrompts = () => {
 		try {
@@ -67,17 +50,10 @@
 			console.error("[DS自定义提示词] 提示词记录保存失败", e);
 		}
 	};
-	var markSessionInjected = (id) => {
-		if (id === void 0 || id === null) return;
-		const map = readMap();
-		map[String(id)] = 1;
-		const keys = Object.keys(map);
-		if (keys.length > MAX_REMEMBERED) for (const k of keys.slice(0, keys.length - MAX_REMEMBERED)) delete map[k];
-		try {
-			GM_setValue(INJECTED_KEY, map);
-		} catch (e) {
-			console.error("[DS自定义提示词] 会话标记保存失败", e);
-		}
+	var injectedWithoutSession = false;
+	var isInjectedWithoutSession = () => injectedWithoutSession;
+	var markInjectedWithoutSession = () => {
+		injectedWithoutSession = true;
 	};
 	var read = (key, fallback) => {
 		try {
@@ -101,9 +77,22 @@
 	};
 	if (!Array.isArray(state.presets)) state.presets = [];
 	state.defaultId = read(DEFAULT_KEY, state.presets[0]?.id || "");
+	function resolvePrompt(id, seen = new Set()) {
+		const p = state.presets.find((x) => x.id === id);
+		if (!p || seen.has(id)) return "";
+		seen.add(id);
+		const parts = [];
+		for (const parentId of p.inherits ?? []) {
+			const part = resolvePrompt(parentId, seen);
+			if (part) parts.push(part);
+		}
+		const own = p.prompt?.trim();
+		if (own) parts.push(own);
+		return parts.join("\n\n");
+	}
 	var getPrompt = () => {
 		if (!state.enabled) return "";
-		return state.presets.find((p) => p.id === state.defaultId)?.prompt?.trim() || "";
+		return resolvePrompt(state.defaultId);
 	};
 	var save = () => {
 		write(KEY, state.presets);
@@ -149,6 +138,11 @@
 	function isInjected(text) {
 		return typeof text === "string" && text.startsWith("[DS_CUSTOM_SYSTEM_PROMPT");
 	}
+	var sessionState = new Map();
+	function noteSessionHistory(sessionId, hasInjected) {
+		if (sessionId === void 0 || sessionId === null) return;
+		sessionState.set(String(sessionId), hasInjected);
+	}
 	function modifyBody(body, url) {
 		const prompt = getPrompt();
 		if (!prompt || typeof body !== "string") return body;
@@ -160,9 +154,14 @@
 			if (isInjected(data.prompt)) return body;
 			const sessionId = data.chat_session_id;
 			const hasSession = sessionId !== void 0 && sessionId !== null;
-			if (hasSession ? isSessionInjected(sessionId) : isInjectedWithoutSession()) return body;
+			if (hasSession) {
+				const state = sessionState.get(String(sessionId));
+				const isFirstMessage = data.parent_message_id === null || data.parent_message_id === void 0;
+				if (state === true) return body;
+				if (state === void 0 && !isFirstMessage) return body;
+			} else if (isInjectedWithoutSession()) return body;
 			data.prompt = buildInjected(prompt, data.prompt);
-			if (hasSession) markSessionInjected(sessionId);
+			if (hasSession) sessionState.set(String(sessionId), true);
 			else markInjectedWithoutSession();
 			rememberPrompt(prompt);
 			log("已注入模板", String(url));
@@ -173,32 +172,36 @@
 		return body;
 	}
 	var HISTORY_URL = /\/api\/v0\/chat\/history_messages(?:[?"#]|$)/i;
-	function cleanMessage(msg) {
+	function cleanMessage(msg, mark) {
 		if (!msg || typeof msg !== "object") return;
 		const fragments = msg.fragments;
 		if (!Array.isArray(fragments)) return;
 		for (const f of fragments) {
 			if (!f || f.type !== "REQUEST" || typeof f.content !== "string") continue;
 			if (!isInjected(f.content)) continue;
+			mark.found = true;
 			f.content = stripInjected(f.content);
 		}
 	}
-	function cleanBizData(data) {
+	function cleanBizData(data, mark) {
 		if (!data || typeof data !== "object") return;
 		const messages = data.chat_messages;
 		if (!Array.isArray(messages)) return;
-		for (const m of messages) cleanMessage(m);
+		for (const m of messages) cleanMessage(m, mark);
 	}
-	function cleanPayload(json) {
+	function cleanPayload(json, mark) {
 		if (!json || typeof json !== "object") return;
 		const data = json.data;
 		if (!data || typeof data !== "object") return;
-		cleanBizData(data.biz_data);
+		cleanBizData(data.biz_data, mark);
 	}
 	function cleanHistoryJson(text) {
+		const mark = { found: false };
 		try {
 			const json = JSON.parse(text);
-			cleanPayload(json);
+			cleanPayload(json, mark);
+			const sessionId = json?.data?.biz_data?.chat_session?.id;
+			if (sessionId !== void 0 && sessionId !== null) noteSessionHistory(sessionId, mark.found);
 			return JSON.stringify(json);
 		} catch {
 			return text;
@@ -722,50 +725,278 @@
 	};
 	var PANEL_STYLE = `
       #__ds_prompt_manager {
-        position:fixed; right:24px; bottom:100px; z-index:2147483647;
-        color:var(--ds-text-primary, CanvasText);
-        font:14px/1.5 system-ui,sans-serif;
+        --pn-bg: var(--dsw-alias-bg-layer-2, #ffffff);
+        --pn-bg-input: var(--dsw-alias-bg-layer-1, #f9fafb);
+        --pn-bg-hover: var(--dsw-alias-button-floating-hover, #f1f3f5);
+        --pn-border: var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.1));
+        --pn-border-strong: var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.12));
+        --pn-text: var(--dsw-alias-label-primary, #0f1115);
+        --pn-text-2: var(--dsw-alias-label-secondary, #61666b);
+        --pn-text-3: var(--dsw-alias-label-tertiary, #81858c);
+        --pn-brand: var(--dsw-alias-brand-primary, #3964fe);
+        --pn-brand-soft: var(--dsw-static-deepseek-50, #edf3fe);
+        --pn-radius: 14px;
+        --pn-radius-sm: 9px;
+        --pn-font: var(--dsw-font-family, "Inter", system-ui, -apple-system, "Segoe UI", sans-serif);
+        position: fixed;
+        z-index: 2147483647;
+        color: var(--pn-text);
+        font: 14px/1.5 var(--pn-font);
       }
-      #__ds_prompt_manager button {
-        color:inherit; font:inherit; cursor:pointer;
-        border:1px solid var(--ds-border-color, color-mix(in srgb, CanvasText 20%, transparent));
-        background:var(--ds-button-background, Canvas);
-        border-radius:9px; padding:7px 12px;
+      html.dark #__ds_prompt_manager,
+      body.dark #__ds_prompt_manager,
+      [data-theme="dark"] #__ds_prompt_manager {
+        --pn-bg: var(--dsw-alias-bg-layer-2, #2c2c2e);
+        --pn-bg-input: var(--dsw-alias-bg-layer-1, #232324);
+        --pn-bg-hover: var(--dsw-alias-button-floating-hover, #353638);
+        --pn-border: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.12));
+        --pn-border-strong: var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.16));
+        --pn-text: var(--dsw-alias-label-primary, #f9fafb);
+        --pn-text-2: var(--dsw-alias-label-secondary, #cfd3d6);
+        --pn-text-3: var(--dsw-alias-label-tertiary, #adb2b8);
+        --pn-brand: var(--dsw-alias-brand-primary, #5686fe);
+        --pn-brand-soft: rgba(86, 134, 254, 0.16);
       }
+
+      /* 入口按钮 */
+      #__ds_prompt_manager #__ds_prompt_toggle {
+        display: inline-flex; align-items: center; gap: 6px;
+        height: 32px; padding: 0 14px;
+        border-radius: 999px;
+        border: 1px solid var(--pn-border);
+        background: var(--pn-bg);
+        color: var(--pn-text);
+        font: 500 13px/1 var(--pn-font);
+        cursor: pointer;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+        transition: background .18s var(--ds-ease-out, ease), border-color .18s var(--ds-ease-out, ease);
+      }
+      #__ds_prompt_manager #__ds_prompt_toggle[hidden] {
+        display: none;
+      }
+      #__ds_prompt_manager #__ds_prompt_toggle:hover {
+        background: var(--pn-bg-hover);
+        border-color: var(--pn-border-strong);
+      }
+
+      /* 面板 */
       #__ds_prompt_manager .ds-prompt-window {
-        position:absolute; right:0; bottom:44px;
-        width:min(420px, calc(100vw - 32px)); max-height:70vh; overflow:auto;
-        padding:16px; box-sizing:border-box;
-        background:var(--ds-card-background, Canvas);
-        color:var(--ds-text-primary, CanvasText);
-        border:1px solid var(--ds-border-color, color-mix(in srgb, CanvasText 20%, transparent));
-        border-radius:14px; box-shadow:0 8px 32px #0002;
+        position: absolute; right: 0; bottom: 44px;
+        width: min(400px, calc(100vw - 32px));
+        max-height: 72vh; overflow: auto;
+        padding: 18px 18px 16px;
+        box-sizing: border-box;
+        background: var(--pn-bg);
+        color: var(--pn-text);
+        border: 1px solid var(--pn-border);
+        border-radius: var(--pn-radius);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+        scrollbar-width: thin;
       }
-      #__ds_prompt_manager input, #__ds_prompt_manager textarea,
-      #__ds_prompt_manager select {
-        box-sizing:border-box; width:100%; padding:8px;
-        margin:5px 0 10px; border-radius:8px;
-        color:inherit; background:var(--ds-input-background, Canvas);
-        border:1px solid var(--ds-border-color, color-mix(in srgb, CanvasText 20%, transparent));
-        font:inherit;
+      #__ds_prompt_manager .ds-header {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 12px; margin-bottom: 14px;
+        padding-right: 30px;
       }
-      #__ds_prompt_manager textarea { min-height:150px; resize:vertical; }
-      #__ds_prompt_manager .ds-actions { display:flex; gap:8px; flex-wrap:wrap; }
-      #__ds_prompt_manager .ds-title { font-weight:650; margin-bottom:12px; }
-      #__ds_prompt_manager .ds-status { opacity:.7; font-size:12px; margin-top:8px; }
+      #__ds_prompt_manager .ds-title {
+        font: 600 15px/1.4 var(--pn-font);
+        letter-spacing: .2px;
+        user-select: none;
+      }
+      #__ds_prompt_manager .ds-close {
+        position: absolute; top: 10px; right: 10px;
+        width: 26px; height: 26px; padding: 0;
+        display: flex; align-items: center; justify-content: center;
+        border-radius: 8px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--pn-text-3);
+        font: 400 16px/1 var(--pn-font);
+        cursor: pointer;
+      }
+      #__ds_prompt_manager .ds-close:hover {
+        background: var(--pn-bg-hover);
+        color: var(--pn-text);
+      }
+
+      /* 表单 */
+      #__ds_prompt_manager label {
+        display: block;
+        margin: 12px 0 6px;
+        color: var(--pn-text-2);
+        font: 500 12px/1.4 var(--pn-font);
+      }
+      #__ds_prompt_manager label:has(> input[type="checkbox"]) {
+        display: flex; align-items: center; gap: 8px;
+        margin: 10px 0;
+        color: var(--pn-text-2);
+        font-size: 13px;
+        cursor: pointer;
+      }
+      #__ds_prompt_manager input[type="checkbox"] {
+        width: 15px; height: 15px;
+        margin: 0;
+        accent-color: var(--pn-brand);
+        cursor: pointer;
+      }
+      #__ds_prompt_manager input[type="text"],
+      #__ds_prompt_manager input:not([type]),
+      #__ds_prompt_manager select,
+      #__ds_prompt_manager textarea {
+        box-sizing: border-box; width: 100%;
+        margin: 0;
+        border-radius: var(--pn-radius-sm);
+        border: 1px solid var(--pn-border);
+        background: var(--pn-bg-input);
+        color: var(--pn-text);
+        font: 13px/1.5 var(--pn-font);
+        transition: border-color .18s var(--ds-ease-out, ease), background .18s var(--ds-ease-out, ease);
+      }
+      #__ds_prompt_manager input[type="text"],
+      #__ds_prompt_manager input:not([type]),
+      #__ds_prompt_manager select:not([multiple]) {
+        height: 36px; padding: 0 12px;
+      }
+      #__ds_prompt_manager select[multiple] {
+        padding: 6px;
+        min-height: 92px;
+      }
+      #__ds_prompt_manager select[multiple] option {
+        padding: 5px 8px;
+        border-radius: 6px;
+      }
+      #__ds_prompt_manager .ds-inherits {
+        max-height: 120px; overflow: auto;
+        padding: 4px;
+        border-radius: var(--pn-radius-sm);
+        border: 1px solid var(--pn-border);
+        background: var(--pn-bg-input);
+      }
+      #__ds_prompt_manager .ds-inherits label {
+        display: flex; align-items: center; gap: 8px;
+        margin: 0; padding: 6px 8px;
+        border-radius: 6px;
+        color: var(--pn-text);
+        font: 400 13px/1.4 var(--pn-font);
+        cursor: pointer;
+      }
+      #__ds_prompt_manager .ds-inherits label:hover {
+        background: var(--pn-bg-hover);
+      }
+      #__ds_prompt_manager .ds-inherits .ds-empty {
+        padding: 8px;
+        color: var(--pn-text-3);
+        font-size: 12px;
+      }
+      #__ds_prompt_manager textarea {
+        min-height: 132px;
+        padding: 10px 12px;
+        resize: vertical;
+      }
+      #__ds_prompt_manager input:focus,
+      #__ds_prompt_manager select:focus,
+      #__ds_prompt_manager textarea:focus {
+        outline: none;
+        border-color: var(--pn-brand);
+        background: var(--pn-bg);
+      }
+
+      /* 按钮行 */
+      #__ds_prompt_manager .ds-actions {
+        display: flex; gap: 8px; flex-wrap: wrap;
+        margin-top: 16px;
+      }
+      #__ds_prompt_manager .ds-actions button {
+        height: 32px; padding: 0 14px;
+        border-radius: var(--pn-radius-sm);
+        border: 1px solid var(--pn-border);
+        background: var(--pn-bg-input);
+        color: var(--pn-text);
+        font: 500 13px/1 var(--pn-font);
+        cursor: pointer;
+        transition: background .18s var(--ds-ease-out, ease), border-color .18s var(--ds-ease-out, ease);
+      }
+      #__ds_prompt_manager .ds-actions button:hover {
+        background: var(--pn-bg-hover);
+        border-color: var(--pn-border-strong);
+      }
+      #__ds_prompt_manager .ds-actions #__ds_prompt_save {
+        background: var(--pn-brand);
+        border-color: var(--pn-brand);
+        color: #fff;
+      }
+      #__ds_prompt_manager .ds-actions #__ds_prompt_save:hover {
+        filter: brightness(1.06);
+      }
+
+      /* 状态行 */
+      #__ds_prompt_manager .ds-status {
+        min-height: 18px;
+        margin-top: 12px;
+        color: var(--pn-text-3);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      /* 使用说明 */
+      #__ds_prompt_manager .ds-help {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid var(--pn-border);
+      }
+      #__ds_prompt_manager .ds-help-title {
+        display: flex; align-items: center; gap: 6px;
+        margin: 0;
+        padding: 0;
+        border: none;
+        background: transparent;
+        color: var(--pn-text-3);
+        font: 500 12px/1.4 var(--pn-font);
+        cursor: pointer;
+      }
+      #__ds_prompt_manager .ds-help-title:hover {
+        color: var(--pn-text-2);
+      }
+      #__ds_prompt_manager .ds-help-toggle {
+        display: inline-block;
+        transition: transform .18s var(--ds-ease-out, ease);
+      }
+      #__ds_prompt_manager .ds-help[data-open="true"] .ds-help-toggle {
+        transform: rotate(90deg);
+      }
+      #__ds_prompt_manager .ds-help ul {
+        margin: 8px 0 0;
+        padding-left: 18px;
+        color: var(--pn-text-3);
+        font-size: 12px;
+        line-height: 1.8;
+      }
+      #__ds_prompt_manager .ds-help[data-open="false"] ul {
+        display: none;
+      }
 `;
 	var PANEL_HTML = `
       <button type="button" id="__ds_prompt_toggle" data-i18n="toggle"></button>
       <section class="ds-prompt-window" hidden>
-        <div class="ds-title" data-i18n="title"></div>
+        <div class="ds-header">
+          <div class="ds-title" data-i18n="title"></div>
+        </div>
         <label data-i18n="label.template"></label>
         <select id="__ds_prompt_select"></select>
         <label data-i18n="label.name"></label>
-        <input id="__ds_prompt_name" data-i18n-placeholder="placeholder.name">
+        <input id="__ds_prompt_name" type="text" data-i18n-placeholder="placeholder.name">
         <label data-i18n="label.content"></label>
         <textarea id="__ds_prompt_text" data-i18n-placeholder="placeholder.content"></textarea>
-        <label><input id="__ds_prompt_enabled" type="checkbox" style="width:auto"> <span data-i18n="enable.inject"></span></label>
-        <label><input id="__ds_pet_enabled" type="checkbox" style="width:auto"> <span data-i18n="enable.pet"></span></label>
+        <label data-i18n="label.inherits"></label>
+        <div id="__ds_prompt_inherits" class="ds-inherits"></div>
+        <label><input id="__ds_prompt_enabled" type="checkbox"> <span data-i18n="enable.inject"></span></label>
+        <label><input id="__ds_pet_enabled" type="checkbox"> <span data-i18n="enable.pet"></span></label>
+        <label data-i18n="label.language"></label>
+        <select id="__ds_prompt_lang">
+          <option value="auto" data-i18n="lang.auto"></option>
+          <option value="zh" data-i18n="lang.zh"></option>
+          <option value="en" data-i18n="lang.en"></option>
+        </select>
         <div class="ds-actions">
           <button type="button" id="__ds_prompt_new" data-i18n="action.new"></button>
           <button type="button" id="__ds_prompt_save" data-i18n="action.save"></button>
@@ -773,6 +1004,18 @@
           <button type="button" id="__ds_prompt_delete" data-i18n="action.delete"></button>
         </div>
         <div class="ds-status" id="__ds_prompt_status"></div>
+        <div class="ds-help" id="__ds_prompt_help" data-open="false">
+          <button type="button" class="ds-help-title" id="__ds_prompt_help_toggle">
+            <span class="ds-help-toggle">▸</span>
+            <span data-i18n="help.title"></span>
+          </button>
+          <ul>
+            <li data-i18n="help.inject"></li>
+            <li data-i18n="help.inherit"></li>
+            <li data-i18n="help.pet"></li>
+            <li data-i18n="help.close"></li>
+          </ul>
+        </div>
       </section>
 `;
 	var ENABLED_KEY = "ds_pet_enabled_v1";
@@ -805,12 +1048,25 @@
 		} catch {}
 	}
 	function setPetAnchor(x, y) {
+		loaded = true;
 		anchor = {
 			x,
 			y,
 			rx: x / window.innerWidth,
 			ry: y / window.innerHeight
 		};
+	}
+	function persistAnchor() {
+		load();
+		if (!anchor) return;
+		try {
+			GM_setValue(POSITION_KEY$1, {
+				rx: anchor.rx,
+				ry: anchor.ry
+			});
+		} catch (e) {
+			console.error("[DS自定义提示词] 位置保存失败", e);
+		}
 	}
 	function getPetAnchor() {
 		load();
@@ -826,6 +1082,7 @@
 		"label.template": "模板",
 		"label.name": "模板名称",
 		"label.content": "提示词内容",
+		"label.inherits": "继承模板（可多选）",
 		"placeholder.name": "例如：论文润色",
 		"placeholder.content": "输入希望模型遵循的指令",
 		"enable.inject": "启用后台注入",
@@ -852,14 +1109,25 @@
 		"status.defaultSet": "默认模板已设置：",
 		"status.nothingToDelete": "没有可删除的模板",
 		"status.confirmDelete": "确定删除当前模板？",
-		"status.deleted": "已删除"
+		"status.deleted": "已删除",
+		"status.noInherits": "没有其他模板可继承",
+		"help.title": "使用说明",
+		"help.inject": "开启「启用后台注入」后，新会话的第一条消息会带上当前默认模板；同一会话后续消息不再重复注入。",
+		"help.inherit": "「继承模板」可多选：被选模板的正文会按顺序拼在本模板正文之前；删除模板时会自动从其他模板的继承列表移除。",
+		"help.pet": "取消「显示大肥鱼动画」会移除桌宠；之后想找回，双击提示词按钮即可。",
+		"help.close": "点面板外任意位置、按 Esc，或再次点击提示词按钮都可以关闭面板。",
+		"label.language": "界面语言",
+		"lang.auto": "跟随浏览器",
+		"lang.zh": "中文",
+		"lang.en": "English"
 	};
-	var dict = (navigator.language || "").toLowerCase().startsWith("zh") ? zh : {
+	var en = {
 		"toggle": "Prompts",
 		"title": "Custom System Prompt",
 		"label.template": "Template",
 		"label.name": "Template name",
 		"label.content": "Prompt",
+		"label.inherits": "Inherit templates (multi-select)",
 		"placeholder.name": "e.g. Paper polishing",
 		"placeholder.content": "Instructions the model should follow",
 		"enable.inject": "Enable background injection",
@@ -886,15 +1154,49 @@
 		"status.defaultSet": "Default template set: ",
 		"status.nothingToDelete": "No template to delete",
 		"status.confirmDelete": "Delete the current template?",
-		"status.deleted": "Deleted"
+		"status.deleted": "Deleted",
+		"status.noInherits": "No other templates to inherit",
+		"help.title": "How it works",
+		"help.inject": "With background injection on, the first message of each new session carries the default template; later messages in the same session are left untouched.",
+		"help.inherit": "Inherit templates (multi-select): their text is prepended in order to this template; deleting a template removes it from every inheritance list.",
+		"help.pet": "Unchecking \"Show pet animation\" removes the pet; double-click the prompt button to bring it back.",
+		"help.close": "Click outside, press Esc, or click the prompt button again to close.",
+		"label.language": "Language",
+		"lang.auto": "Follow browser",
+		"lang.zh": "中文",
+		"lang.en": "English"
 	};
-	var t = (key) => dict[key] ?? zh[key] ?? key;
+	var LANG_KEY = "ds_prompt_lang_v1";
+	function getLangSetting() {
+		try {
+			const v = GM_getValue(LANG_KEY, "auto");
+			return v === "zh" || v === "en" ? v : "auto";
+		} catch {
+			return "auto";
+		}
+	}
+	function setLangSetting(lang) {
+		try {
+			GM_setValue(LANG_KEY, lang === "zh" || lang === "en" ? lang : "auto");
+		} catch (e) {
+			console.error("[DS自定义提示词] 语言设置保存失败", e);
+		}
+	}
+	var browserIsZh = () => (navigator.language || "").toLowerCase().startsWith("zh");
+	var currentDict = () => {
+		const setting = getLangSetting();
+		return setting === "zh" || setting === "auto" && browserIsZh() ? zh : en;
+	};
+	var t = (key) => {
+		return currentDict()[key] ?? zh[key] ?? key;
+	};
 	function applyI18n(root) {
 		if (!root) return;
 		for (const el of root.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n);
 		for (const el of root.querySelectorAll("[data-i18n-placeholder]")) el.placeholder = t(el.dataset.i18nPlaceholder);
 	}
 	var panelRoot = null;
+	var sectionDragActive = false;
 	function ensurePanel() {
 		if (panelRoot) return panelRoot;
 		const style = document.createElement("style");
@@ -911,6 +1213,19 @@
 		section.hidden = true;
 		const toggle = $("__ds_prompt_toggle");
 		toggle.hidden = true;
+		bindButtonDrag(root, toggle);
+		const langSelect = $("__ds_prompt_lang");
+		langSelect.value = getLangSetting();
+		langSelect.addEventListener("change", (e) => {
+			setLangSetting(e.target.value);
+			applyI18n(root);
+			const closeBtn = root.querySelector("#__ds_prompt_manager_close");
+			if (closeBtn) {
+				closeBtn.setAttribute("aria-label", t("action.close"));
+				closeBtn.title = t("action.close");
+			}
+			refreshSelect();
+		});
 		let selectedId = state.presets[0]?.id || "";
 		function status(text) {
 			$("__ds_prompt_status").textContent = text;
@@ -933,17 +1248,48 @@
 			$("__ds_prompt_text").value = p?.prompt || "";
 			$("__ds_prompt_enabled").checked = state.enabled;
 			$("__ds_pet_enabled").checked = isPetEnabled();
+			refreshInherits(p);
+		}
+		function refreshInherits(current) {
+			const list = $("__ds_prompt_inherits");
+			list.replaceChildren();
+			const chosen = new Set(current?.inherits ?? []);
+			const others = state.presets.filter((p) => p.id !== selectedId);
+			if (!others.length) {
+				const empty = document.createElement("div");
+				empty.className = "ds-empty";
+				empty.textContent = t("status.noInherits");
+				list.appendChild(empty);
+				return;
+			}
+			for (const p of others) {
+				const row = document.createElement("label");
+				const box = document.createElement("input");
+				box.type = "checkbox";
+				box.value = p.id;
+				box.checked = chosen.has(p.id);
+				const text = document.createElement("span");
+				text.textContent = p.name || p.id;
+				row.append(box, text);
+				list.appendChild(row);
+			}
+		}
+		function readInherits() {
+			return [...$("__ds_prompt_inherits").querySelectorAll("input:checked")].map((b) => b.value);
 		}
 		const close = document.createElement("button");
 		close.type = "button";
 		close.id = "__ds_prompt_manager_close";
-		close.textContent = t("action.close");
-		close.style.marginBottom = "10px";
+		close.className = "ds-close";
+		close.textContent = "✕";
+		close.setAttribute("aria-label", t("action.close"));
+		close.title = t("action.close");
 		close.addEventListener("click", () => {
 			section.hidden = true;
 		});
-		section.prepend(close);
+		section.querySelector(".ds-header").appendChild(close);
 		let dragStart = null;
+		sectionDragActive = false;
 		section.addEventListener("pointerdown", (e) => {
 			if (e.button !== 0) return;
 			if (e.target.closest("button, input, textarea, select, label")) return;
@@ -952,28 +1298,55 @@
 				dx: e.clientX - rect.left,
 				dy: e.clientY - rect.top
 			};
+			sectionDragActive = true;
 			section.setPointerCapture(e.pointerId);
 			section.style.cursor = "move";
 			e.preventDefault();
 		});
 		section.addEventListener("pointermove", (e) => {
 			if (!dragStart) return;
-			const left = Math.max(0, Math.min(e.clientX - dragStart.dx, window.innerWidth - section.offsetWidth));
-			const top = Math.max(0, Math.min(e.clientY - dragStart.dy, window.innerHeight - section.offsetHeight));
-			section.style.left = left + "px";
-			section.style.top = top + "px";
+			section.style.left = clampLeft(e.clientX - dragStart.dx) + "px";
+			section.style.top = clampTop(e.clientY - dragStart.dy) + "px";
 			section.style.right = "auto";
 			section.style.bottom = "auto";
 		});
 		const endDrag = () => {
 			dragStart = null;
 			section.style.cursor = "";
+			setTimeout(() => {
+				sectionDragActive = false;
+			}, 0);
 		};
 		section.addEventListener("pointerup", endDrag);
 		section.addEventListener("pointercancel", endDrag);
-		$("__ds_prompt_toggle").addEventListener("click", () => {
+		$("__ds_prompt_help_toggle").addEventListener("click", () => {
+			const help = $("__ds_prompt_help");
+			help.dataset.open = help.dataset.open === "true" ? "false" : "true";
+		});
+		$("__ds_prompt_toggle").addEventListener("click", (e) => {
+			e.stopPropagation();
+			if (consumeSuppressedClick()) return;
 			section.hidden = !section.hidden;
-			if (!section.hidden) refreshSelect();
+			if (!section.hidden) {
+				syncSwitches();
+				refreshSelect();
+				placeNearButton(section);
+			}
+		});
+		document.addEventListener("click", (e) => {
+			if (section.hidden) return;
+			if (sectionDragActive) return;
+			const r = section.getBoundingClientRect();
+			if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) return;
+			const t = panelRoot?.querySelector("#__ds_prompt_toggle");
+			if (t && t.offsetParent !== null) {
+				const b = t.getBoundingClientRect();
+				if (e.clientX >= b.left && e.clientX <= b.right && e.clientY >= b.top && e.clientY <= b.bottom) return;
+			}
+			section.hidden = true;
+		}, true);
+		document.addEventListener("keydown", (e) => {
+			if (e.key === "Escape" && !section.hidden) section.hidden = true;
 		});
 		$("__ds_pet_enabled").addEventListener("change", (e) => {
 			const on = e.target.checked;
@@ -1006,6 +1379,7 @@
 			if (!p) return status(t("status.needNew"));
 			p.name = $("__ds_prompt_name").value.trim() || t("status.untitled");
 			p.prompt = $("__ds_prompt_text").value;
+			p.inherits = readInherits();
 			state.enabled = $("__ds_prompt_enabled").checked;
 			save();
 			refreshSelect();
@@ -1021,6 +1395,7 @@
 			if (!state.presets.some((p) => p.id === selectedId)) return status(t("status.nothingToDelete"));
 			if (!confirm(t("status.confirmDelete"))) return;
 			state.presets = state.presets.filter((p) => p.id !== selectedId);
+			for (const p of state.presets) if (Array.isArray(p.inherits)) p.inherits = p.inherits.filter((id) => id !== selectedId);
 			if (state.defaultId === selectedId) state.defaultId = state.presets[0]?.id || "";
 			selectedId = state.presets[0]?.id || "";
 			save();
@@ -1030,16 +1405,24 @@
 		refreshSelect();
 		return root;
 	}
+	function syncSwitches() {
+		const petBox = panelRoot?.querySelector("#__ds_pet_enabled");
+		if (petBox) petBox.checked = isPetEnabled();
+		const enabledBox = panelRoot?.querySelector("#__ds_prompt_enabled");
+		if (enabledBox) enabledBox.checked = state.enabled;
+	}
 	function openPromptPanel(x, y) {
 		const root = ensurePanel();
 		const section = root.querySelector(".ds-prompt-window");
 		section.hidden = false;
-		const width = section.offsetWidth || 420;
+		syncSwitches();
+		const width = section.offsetWidth || 400;
+		const height = section.offsetHeight || 400;
 		section.style.position = "fixed";
 		section.style.right = "auto";
 		section.style.bottom = "auto";
 		section.style.left = Math.max(8, Math.min(x, window.innerWidth - width - 8)) + "px";
-		section.style.top = Math.max(8, Math.min(y, window.innerHeight - 80)) + "px";
+		section.style.top = Math.max(8, Math.min(y, window.innerHeight - height - 8)) + "px";
 		return root;
 	}
 	function mountPromptButton() {
@@ -1051,10 +1434,13 @@
 		root.style.position = "fixed";
 		root.style.right = "auto";
 		root.style.bottom = "auto";
-		root.style.left = anchorLeft(anchorX()) + "px";
-		root.style.top = anchorTop(anchorY()) + "px";
+		placeAtAnchor(root);
 		toggle.hidden = false;
 		root.querySelector("#__ds_pet_enabled").checked = isPetEnabled();
+	}
+	function placeAtAnchor(root) {
+		root.style.left = anchorLeft(anchorX()) + "px";
+		root.style.top = anchorTop(anchorY()) + "px";
 	}
 	function anchorX() {
 		const a = getPetAnchor();
@@ -1069,6 +1455,77 @@
 	}
 	function anchorTop(y) {
 		return Math.max(0, Math.min(y, window.innerHeight - 40));
+	}
+	function bindButtonDrag(root, toggle) {
+		let start = null;
+		let moved = false;
+		toggle.addEventListener("pointerdown", (e) => {
+			if (e.button !== 0) return;
+			const rect = root.getBoundingClientRect();
+			start = {
+				cx: e.clientX,
+				cy: e.clientY,
+				left: rect.left,
+				top: rect.top
+			};
+			moved = false;
+			toggle.setPointerCapture(e.pointerId);
+		});
+		toggle.addEventListener("pointermove", (e) => {
+			if (!start) return;
+			const dx = e.clientX - start.cx;
+			const dy = e.clientY - start.cy;
+			if (!moved && Math.hypot(dx, dy) < 4) return;
+			moved = true;
+			const left = anchorLeft(start.left + dx);
+			const top = anchorTop(start.top + dy);
+			root.style.left = left + "px";
+			root.style.top = top + "px";
+		});
+		const finish = (e) => {
+			if (!start) return;
+			const wasMoved = moved;
+			start = null;
+			moved = false;
+			if (!wasMoved) return;
+			e.preventDefault();
+			suppressClick = true;
+			const rect = root.getBoundingClientRect();
+			setPetAnchor(rect.left, rect.top);
+			persistAnchor();
+		};
+		toggle.addEventListener("pointerup", finish);
+		toggle.addEventListener("pointercancel", () => {
+			start = null;
+			moved = false;
+		});
+	}
+	function consumeSuppressedClick() {
+		if (!suppressClick) return false;
+		suppressClick = false;
+		return true;
+	}
+	var suppressClick = false;
+	function clampTop(y) {
+		const h = panelRoot?.querySelector(".ds-prompt-window")?.offsetHeight || 400;
+		return Math.max(0, Math.min(y, Math.max(0, window.innerHeight - h)));
+	}
+	function clampLeft(x) {
+		const w = panelRoot?.querySelector(".ds-prompt-window")?.offsetWidth || 400;
+		return Math.max(0, Math.min(x, window.innerWidth - w));
+	}
+	function placeNearButton(section) {
+		const toggle = panelRoot?.querySelector("#__ds_prompt_toggle");
+		if (!toggle) return;
+		const btn = toggle.getBoundingClientRect();
+		const w = section.offsetWidth || 400;
+		const h = section.offsetHeight || 400;
+		section.style.position = "fixed";
+		section.style.right = "auto";
+		section.style.bottom = "auto";
+		section.style.left = Math.max(8, Math.min(btn.left, window.innerWidth - w - 8)) + "px";
+		const above = btn.top - h - 8;
+		section.style.top = (above >= 8 ? above : Math.min(btn.bottom + 8, window.innerHeight - h - 8)) + "px";
 	}
 	function unmountPromptButton() {
 		if (!panelRoot) return;
@@ -1736,9 +2193,41 @@
 		});
 		setInterval(() => scrubRoot(document.body), 2e3);
 	}
+	var LEGACY_INJECTED_SESSIONS = "ds_custom_prompt_injected_sessions_v1";
+	var LEGACY_BUTTON_POS = "ds_prompt_button_pos_v1";
+	var cleaners = [{
+		name: "旧版会话注入标记",
+		key: LEGACY_INJECTED_SESSIONS,
+		run: () => {
+			try {
+				if (GM_getValue(LEGACY_INJECTED_SESSIONS, void 0) === void 0) return;
+				GM_deleteValue(LEGACY_INJECTED_SESSIONS);
+				console.info("[DS自定义提示词] 已清理旧版会话注入标记");
+			} catch (e) {
+				console.error("[DS自定义提示词] 清理旧版会话注入标记失败", e);
+			}
+		}
+	}, {
+		name: "旧版按钮坐标",
+		key: LEGACY_BUTTON_POS,
+		run: () => {
+			try {
+				if (GM_getValue(LEGACY_BUTTON_POS, void 0) === void 0) return;
+				GM_deleteValue(LEGACY_BUTTON_POS);
+				console.info("[DS自定义提示词] 已清理旧版按钮坐标");
+			} catch (e) {
+				console.error("[DS自定义提示词] 清理旧版按钮坐标失败", e);
+			}
+		}
+	}];
+	function runCleanup() {
+		for (const c of cleaners) c.run();
+	}
 	(() => {
 		"use strict";
-		installInterceptors(typeof unsafeWindow !== "undefined" ? unsafeWindow : window);
+		const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+		runCleanup();
+		installInterceptors(W);
 		const syncEntry = () => {
 			if (isPetEnabled()) {
 				unmountPromptButton();

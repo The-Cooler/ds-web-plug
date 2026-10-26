@@ -5,12 +5,14 @@ import { mountPet, unmountPet } from './pet/widget.js';
 import { isPetEnabled, setPetEnabled } from './pet/state.js';
 import { mountPromptButton, unmountPromptButton } from './ui/panel.js';
 import { installScrubber } from './scrub.js';
+import { runCleanup } from './cleanup.js';
 
 (() => {
   'use strict';
 
   const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
+  runCleanup();
   installInterceptors(W);
 
   const syncEntry = () => {
@@ -31,7 +33,7 @@ import { installScrubber } from './scrub.js';
   observer.observe(document.documentElement, { childList: true, subtree: true });
   if (document.body) syncEntry();
 
-  // 宠物关闭时，双击右下角的提示词按钮把宠物叫回来。
+  // 宠物关闭时，双击提示词按钮把宠物叫回来（按钮位置此时叠加在动画锚点上）。
   document.addEventListener('dblclick', e => {
     if (e.target?.id === '__ds_prompt_toggle' && !isPetEnabled()) {
       setPetEnabled(true);
