@@ -8,7 +8,7 @@ export default defineConfig({
       userscript: {
         name: 'DeepSeek 大肥鱼插件',
         namespace: 'deepseek-custom-prompt',
-        version: '2.3.2',
+        version: '2.3.3',
         description: '自定义提示词模板 + 桌面宠物挂件',
         author: 'LLL',
         license: 'MIT',

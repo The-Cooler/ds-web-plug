@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek 大肥鱼插件
 // @namespace    deepseek-custom-prompt
-// @version      2.3.2
+// @version      2.3.3
 // @author       LLL
 // @description  自定义提示词模板 + 桌面宠物挂件
 // @license      MIT
@@ -796,27 +796,36 @@
       #__ds_prompt_manager .ds-header {
         display: flex; align-items: center; justify-content: space-between;
         gap: 12px; margin-bottom: 14px;
-        padding-right: 30px;
+        padding-right: 64px;
       }
       #__ds_prompt_manager .ds-title {
         font: 600 15px/1.4 var(--pn-font);
         letter-spacing: .2px;
         user-select: none;
       }
-      #__ds_prompt_manager .ds-close {
+      #__ds_prompt_manager .ds-header-actions {
         position: absolute; top: 10px; right: 10px;
+        display: flex; gap: 2px;
+      }
+      #__ds_prompt_manager .ds-pin,
+      #__ds_prompt_manager .ds-close {
         width: 26px; height: 26px; padding: 0;
         display: flex; align-items: center; justify-content: center;
         border-radius: 8px;
         border: 1px solid transparent;
         background: transparent;
         color: var(--pn-text-3);
-        font: 400 16px/1 var(--pn-font);
+        font: 400 14px/1 var(--pn-font);
         cursor: pointer;
       }
+      #__ds_prompt_manager .ds-pin:hover,
       #__ds_prompt_manager .ds-close:hover {
         background: var(--pn-bg-hover);
         color: var(--pn-text);
+      }
+      #__ds_prompt_manager .ds-pin[aria-pressed="true"] {
+        color: var(--pn-brand);
+        background: var(--pn-brand-soft);
       }
 
       /* 表单 */
@@ -980,6 +989,9 @@
       <section class="ds-prompt-window" hidden>
         <div class="ds-header">
           <div class="ds-title" data-i18n="title"></div>
+          <div class="ds-header-actions">
+            <button type="button" class="ds-pin" id="__ds_prompt_pin" aria-pressed="true">🖈</button>
+          </div>
         </div>
         <label data-i18n="label.template"></label>
         <select id="__ds_prompt_select"></select>
@@ -1092,6 +1104,8 @@
 		"action.default": "设为默认",
 		"action.delete": "删除",
 		"action.close": "关闭",
+		"action.pin": "固定窗口",
+		"action.unpin": "取消固定",
 		"menu.title": "大肥鱼",
 		"menu.prompt": "提示词",
 		"menu.hide": "关闭动画",
@@ -1137,6 +1151,8 @@
 		"action.default": "Set default",
 		"action.delete": "Delete",
 		"action.close": "Close",
+		"action.pin": "Pin window",
+		"action.unpin": "Unpin window",
 		"menu.title": "Pet",
 		"menu.prompt": "Prompts",
 		"menu.hide": "Hide animation",
@@ -1224,6 +1240,11 @@
 				closeBtn.setAttribute("aria-label", t("action.close"));
 				closeBtn.title = t("action.close");
 			}
+			const pinBtn = root.querySelector("#__ds_prompt_pin");
+			if (pinBtn) {
+				pinBtn.title = t(pinBtn.getAttribute("aria-pressed") === "true" ? "action.unpin" : "action.pin");
+				pinBtn.setAttribute("aria-label", pinBtn.title);
+			}
 			refreshSelect();
 		});
 		let selectedId = state.presets[0]?.id || "";
@@ -1287,7 +1308,19 @@
 		close.addEventListener("click", () => {
 			section.hidden = true;
 		});
-		section.querySelector(".ds-header").appendChild(close);
+		section.querySelector(".ds-header-actions").appendChild(close);
+		const pin = $("__ds_prompt_pin");
+		let pinned = true;
+		const syncPin = () => {
+			pin.setAttribute("aria-pressed", pinned ? "true" : "false");
+			pin.title = t(pinned ? "action.unpin" : "action.pin");
+			pin.setAttribute("aria-label", pin.title);
+		};
+		syncPin();
+		pin.addEventListener("click", () => {
+			pinned = !pinned;
+			syncPin();
+		});
 		let dragStart = null;
 		sectionDragActive = false;
 		section.addEventListener("pointerdown", (e) => {
@@ -1334,7 +1367,7 @@
 			}
 		});
 		document.addEventListener("click", (e) => {
-			if (section.hidden) return;
+			if (section.hidden || pinned) return;
 			if (sectionDragActive) return;
 			const r = section.getBoundingClientRect();
 			if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) return;

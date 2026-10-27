@@ -44,6 +44,12 @@ function ensurePanel() {
       closeBtn.setAttribute('aria-label', t('action.close'));
       closeBtn.title = t('action.close');
     }
+    const pinBtn = root.querySelector('#__ds_prompt_pin');
+    if (pinBtn) {
+      const on = pinBtn.getAttribute('aria-pressed') === 'true';
+      pinBtn.title = t(on ? 'action.unpin' : 'action.pin');
+      pinBtn.setAttribute('aria-label', pinBtn.title);
+    }
     refreshSelect();
   });
 
@@ -115,7 +121,21 @@ function ensurePanel() {
   close.addEventListener('click', () => {
     section.hidden = true;
   });
-  section.querySelector('.ds-header').appendChild(close);
+  section.querySelector('.ds-header-actions').appendChild(close);
+
+  // 固定：默认固定，固定时点面板外不关闭。
+  const pin = $('__ds_prompt_pin');
+  let pinned = true;
+  const syncPin = () => {
+    pin.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+    pin.title = t(pinned ? 'action.unpin' : 'action.pin');
+    pin.setAttribute('aria-label', pin.title);
+  };
+  syncPin();
+  pin.addEventListener('click', () => {
+    pinned = !pinned;
+    syncPin();
+  });
 
   // 拖动窗口：按住面板内除按钮、输入框、下拉框与文本域以外的任意位置。
   let dragStart = null;
@@ -169,7 +189,7 @@ function ensurePanel() {
   // 判断是否点在面板/按钮内要用事件坐标，而不是 e.target：
   // 按下时面板若调用了 setPointerCapture，click 的 target 会变成面板本身。
   document.addEventListener('click', e => {
-    if (section.hidden) return;
+    if (section.hidden || pinned) return;
     if (sectionDragActive) return;
     const r = section.getBoundingClientRect();
     if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) return;

@@ -73,27 +73,36 @@ export const PANEL_STYLE = `
       #__ds_prompt_manager .ds-header {
         display: flex; align-items: center; justify-content: space-between;
         gap: 12px; margin-bottom: 14px;
-        padding-right: 30px;
+        padding-right: 64px;
       }
       #__ds_prompt_manager .ds-title {
         font: 600 15px/1.4 var(--pn-font);
         letter-spacing: .2px;
         user-select: none;
       }
-      #__ds_prompt_manager .ds-close {
+      #__ds_prompt_manager .ds-header-actions {
         position: absolute; top: 10px; right: 10px;
+        display: flex; gap: 2px;
+      }
+      #__ds_prompt_manager .ds-pin,
+      #__ds_prompt_manager .ds-close {
         width: 26px; height: 26px; padding: 0;
         display: flex; align-items: center; justify-content: center;
         border-radius: 8px;
         border: 1px solid transparent;
         background: transparent;
         color: var(--pn-text-3);
-        font: 400 16px/1 var(--pn-font);
+        font: 400 14px/1 var(--pn-font);
         cursor: pointer;
       }
+      #__ds_prompt_manager .ds-pin:hover,
       #__ds_prompt_manager .ds-close:hover {
         background: var(--pn-bg-hover);
         color: var(--pn-text);
+      }
+      #__ds_prompt_manager .ds-pin[aria-pressed="true"] {
+        color: var(--pn-brand);
+        background: var(--pn-brand-soft);
       }
 
       /* 表单 */
@@ -258,6 +267,9 @@ export const PANEL_HTML = `
       <section class="ds-prompt-window" hidden>
         <div class="ds-header">
           <div class="ds-title" data-i18n="title"></div>
+          <div class="ds-header-actions">
+            <button type="button" class="ds-pin" id="__ds_prompt_pin" aria-pressed="true">🖈</button>
+          </div>
         </div>
         <label data-i18n="label.template"></label>
         <select id="__ds_prompt_select"></select>
